@@ -3,13 +3,25 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+import os
 import re
 import json
 
+load_dotenv()
+
 app = Flask(__name__)
-app.secret_key = "super_secret_session_key"
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///procurement.db"
+app.secret_key = os.environ.get("SECRET_KEY", "super_secret_session_key")
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if not DATABASE_URL:
+    DATABASE_URL = "sqlite:///procurement.db"
+elif DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 300}
 db = SQLAlchemy(app)
 
 # Database Tables
@@ -176,7 +188,9 @@ def staff():
         return redirect("/")
     if session.get("password_expired"):
         return redirect("/change-password")
-    return render_template("staff.html", username=session.get("username", "staff"))
+    user = User.query.filter_by(username=session.get("username"), role="staff").first()
+    days_remaining = password_days_remaining(user) if user else PASSWORD_EXPIRY_DAYS
+    return render_template("staff.html", username=session.get("username", "staff"), days_remaining=days_remaining)
 
 @app.route("/manager")
 def manager():
@@ -190,7 +204,9 @@ def supplier():
         return redirect("/")
     if session.get("password_expired"):
         return redirect("/change-password")
-    return render_template("supplier.html", username=session.get("username", "supplier"))
+    user = User.query.filter_by(username=session.get("username"), role="supplier").first()
+    days_remaining = password_days_remaining(user) if user else PASSWORD_EXPIRY_DAYS
+    return render_template("supplier.html", username=session.get("username", "supplier"), days_remaining=days_remaining)
 
 # login
 @app.route("/login", methods=["POST"])
@@ -293,13 +309,32 @@ def password_meets_requirements(password):
 def password_is_expired(user):
     return not user.password_changed_at or datetime.now() - user.password_changed_at >= timedelta(days=PASSWORD_EXPIRY_DAYS)
 
+def password_days_remaining(user):
+    if not user or not user.password_changed_at:
+        return 0
+    expiry = user.password_changed_at + timedelta(days=PASSWORD_EXPIRY_DAYS)
+    return max(0, (expiry - datetime.now()).days)
+
 def ensure_user_schema():
     db.create_all()
-    columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(user)"))}
-    if "is_disabled" not in columns:
-        db.session.execute(text("ALTER TABLE user ADD COLUMN is_disabled BOOLEAN NOT NULL DEFAULT 0"))
-    if "password_changed_at" not in columns:
-        db.session.execute(text("ALTER TABLE user ADD COLUMN password_changed_at DATETIME"))
+    dialect = db.engine.dialect.name
+    if dialect == "sqlite":
+        columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(user)"))}
+        if "is_disabled" not in columns:
+            db.session.execute(text("ALTER TABLE user ADD COLUMN is_disabled BOOLEAN NOT NULL DEFAULT 0"))
+        if "password_changed_at" not in columns:
+            db.session.execute(text("ALTER TABLE user ADD COLUMN password_changed_at DATETIME"))
+    else:
+        columns = {
+            row[0]
+            for row in db.session.execute(text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'user'"
+            ))
+        }
+        if "is_disabled" not in columns:
+            db.session.execute(text('ALTER TABLE "user" ADD COLUMN is_disabled BOOLEAN NOT NULL DEFAULT FALSE'))
+        if "password_changed_at" not in columns:
+            db.session.execute(text('ALTER TABLE "user" ADD COLUMN password_changed_at TIMESTAMP'))
     db.session.commit()
     for username, initial_password in FIXED_MANAGER_ACCOUNTS.items():
         if not ManagerCredential.query.filter_by(username=username).first():
@@ -929,23 +964,20 @@ def get_deliveries():
 def save_delivery():
     return jsonify({"error": "Use the Inventory Staff verification workflow before confirming receipt."}), 410
 
-if __name__=="__main__":
+def initialize_app():
     with app.app_context():
         ensure_user_schema()
-        sync_low_stock_alerts() # Ensure any missing alerts are generated when app spins up
-
-        if not User.query.filter_by(
-            username="staff"
-        ).first():
-
-            user=User(
+        sync_low_stock_alerts()
+        if not User.query.filter_by(username="staff").first():
+            db.session.add(User(
                 username="staff",
                 password_hash=generate_password_hash("123"),
                 role="staff",
                 password_changed_at=None
-            )
-
-            db.session.add(user)
+            ))
             db.session.commit()
 
+initialize_app()
+
+if __name__ == "__main__":
     app.run(debug=True)

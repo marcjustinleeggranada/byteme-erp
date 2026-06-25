@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Byte Me — Supplier Portal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='staff-portal.css') }}">
+</head>
+<body>
+<div class="staff-app">
+  <aside class="staff-sidebar">
+    <div class="staff-brand"><div class="staff-brand-mark">B</div><div class="staff-brand-copy"><strong>Byte Me</strong><span>Supplier Portal</span></div></div>
+    <nav class="staff-nav">
+      <div class="staff-nav-label">Workspace</div>
+      <a class="staff-nav-item active" href="/supplier"><i class="ti ti-home"></i><span>Dashboard</span></a>
+      <div class="staff-nav-label">Settings</div>
+      <a class="staff-nav-item" href="/change-password"><i class="ti ti-key"></i><span>Change Password</span></a>
+    </nav>
+    <div class="staff-sidebar-footer"><a class="staff-nav-item" href="/logout"><i class="ti ti-logout"></i><span>Logout</span></a></div>
+  </aside>
+  <main class="staff-main">
+    {% if days_remaining <= 7 and days_remaining > 0 %}
+    <div class="pw-expiry-banner {% if days_remaining <= 3 %}danger{% else %}warn{% endif %}">
+      <i class="ti ti-alert-triangle"></i>
+      <span>Your password expires in <strong>{{ days_remaining }} day{% if days_remaining != 1 %}s{% endif %}</strong>. <a href="/change-password">Change it now</a> to avoid being locked out.</span>
+    </div>
+    {% endif %}
+    <header class="staff-topbar"><div class="staff-title-wrap"><div><h1>Supplier Dashboard</h1><p>Byte Me Restaurant procurement partner workspace</p></div></div><div class="staff-user"><div class="staff-user-copy"><strong>{{ username }}</strong><span>Supplier</span></div><div class="staff-avatar">S</div></div></header>
+    <div class="staff-content">
+      <section class="staff-screen active">
+        <div class="staff-card" style="max-width:720px">
+          <div class="staff-card-header"><div><h2>Welcome, {{ username }}</h2><p>Your supplier account is active.</p></div><i class="ti ti-building-store" style="font-size:28px;color:var(--sage-700)"></i></div>
+          <div class="supplier-security-note"><i class="ti ti-shield-lock"></i><span>For security purposes, users are required to update their password regularly. Usernames cannot be changed.</span></div>
+          <div style="margin-top:18px"><a class="staff-btn primary" href="/change-password"><i class="ti ti-key"></i> Change Password</a></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+</body>
+</html>
