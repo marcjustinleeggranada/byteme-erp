@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Byte Me — Inventory Staff Portal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+  <link rel="stylesheet" href="../static/staff-portal.css">
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script defer src="../static/js/staff-portal.js"></script>
+</head>
+<body data-username="{{ username }}">
+<div class="staff-app">
+  <aside class="staff-sidebar" id="staff-sidebar">
+    <div class="staff-brand"><div class="staff-brand-mark">B</div><div class="staff-brand-copy"><strong>Byte Me</strong><span>Inventory Control</span></div></div>
+    <nav class="staff-nav">
+      <div class="staff-nav-label">Workspace</div>
+      <button class="staff-nav-item active" data-title="Dashboard" data-screen="dashboard"><i class="ti ti-home"></i><span>Dashboard</span></button>
+
+      <div class="staff-nav-group">
+        <button class="staff-nav-item group-toggle" data-title="Inventory"><i class="ti ti-package"></i><span>Inventory</span><i class="ti ti-chevron-down group-arrow"></i></button>
+        <div class="staff-subnav">
+          <button data-screen="inventory-list">Inventory List</button>
+          <button data-screen="low-stock">Low Stock Items</button>
+          <button data-screen="stock-adjustments">Stock Adjustments</button>
+        </div>
+      </div>
+
+      <div class="staff-nav-group">
+        <button class="staff-nav-item group-toggle" data-title="Deliveries"><i class="ti ti-truck-delivery"></i><span>Deliveries</span><i class="ti ti-chevron-down group-arrow"></i></button>
+        <div class="staff-subnav">
+          <button data-screen="pending-deliveries">Pending Deliveries</button>
+          <button data-screen="receive-deliveries">Receive Deliveries</button>
+          <button data-screen="delivery-history">Delivery History</button>
+        </div>
+      </div>
+
+      <div class="staff-nav-group">
+        <button class="staff-nav-item group-toggle" data-title="Reports"><i class="ti ti-chart-bar"></i><span>Reports</span><i class="ti ti-chevron-down group-arrow"></i></button>
+        <div class="staff-subnav">
+          <button data-screen="inventory-reports">Inventory Reports</button>
+          <button data-screen="receiving-reports">Receiving Reports</button>
+        </div>
+      </div>
+    </nav>
+    <div class="staff-sidebar-footer">
+      <div class="staff-nav-label">Settings</div>
+      <a class="staff-nav-item" data-title="Change Password" href="/change-password"><i class="ti ti-key"></i><span>Change Password</span></a>
+      <a class="staff-nav-item" data-title="Logout" href="/logout"><i class="ti ti-logout"></i><span>Logout</span></a>
+    </div>
+  </aside>
+  <div class="staff-sidebar-overlay" id="staff-sidebar-overlay"></div>
+
+  <main class="staff-main">
+    <header class="staff-topbar">
+      <div class="staff-title-wrap"><button class="staff-menu-button" id="staff-menu-button" aria-label="Toggle sidebar"><i class="ti ti-menu-2"></i></button><div><h1 id="staff-page-title">Dashboard Overview</h1><p id="staff-page-subtitle">Inventory operations and receiving activity</p></div></div>
+      <div class="staff-user"><div class="staff-user-copy"><strong>{{ username }}</strong><span>Inventory Staff</span></div><div class="staff-avatar">IS</div></div>
+    </header>
+
+    <div class="staff-content">
+      <section class="staff-screen active" id="staff-screen-dashboard">
+        <div class="staff-kpi-grid">
+          <div class="staff-kpi"><span>Total Inventory Items</span><strong id="kpi-total-items">0</strong><i class="ti ti-package"></i></div>
+          <div class="staff-kpi alert"><span>Low Stock Items</span><strong id="kpi-low-items">0</strong><i class="ti ti-alert-triangle"></i></div>
+          <div class="staff-kpi"><span>Pending Deliveries</span><strong id="kpi-pending-deliveries">0</strong><i class="ti ti-truck-loading"></i></div>
+          <div class="staff-kpi good"><span>Today's Deliveries</span><strong id="kpi-today-deliveries">0</strong><i class="ti ti-circle-check"></i></div>
+          <div class="staff-kpi"><span>Recent Adjustments</span><strong id="kpi-recent-adjustments">0</strong><i class="ti ti-adjustments"></i></div>
+        </div>
+        <div class="staff-grid staff-grid-two">
+          <div class="staff-card"><div class="staff-card-header"><div><h2>Recent Inventory Adjustments</h2><p>Latest recorded stock changes</p></div><button class="staff-link-button" data-screen="stock-adjustments">View all</button></div><div id="dashboard-adjustments" class="staff-feed"></div></div>
+          <div class="staff-card"><div class="staff-card-header"><div><h2>Recent Activity</h2><p>Receiving and inventory events</p></div></div><div id="staff-activity-feed" class="staff-feed"></div></div>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-inventory-list">
+        <div class="staff-toolbar"><div class="staff-search"><i class="ti ti-search"></i><input id="inventory-search" type="search" placeholder="Search item ID or name"></div><select id="inventory-status-filter"><option value="all">All statuses</option><option value="in-stock">In Stock</option><option value="low-stock">Low Stock</option><option value="critical">Critical</option></select></div>
+        <div class="staff-table-card"><table><thead><tr><th>Item ID</th><th>Item Name</th><th>Category</th><th>Current Stock</th><th>Unit</th><th>Status</th><th>Last Updated</th></tr></thead><tbody id="staff-inventory-tbody"></tbody></table><div class="staff-pagination"><span id="inventory-page-info">Page 1</span><div><button id="inventory-prev"><i class="ti ti-chevron-left"></i></button><button id="inventory-next"><i class="ti ti-chevron-right"></i></button></div></div></div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-low-stock">
+        <div class="staff-alert-grid"><div class="staff-alert-card"><i class="ti ti-alert-triangle"></i><div><strong id="low-alert-count">0 items require attention</strong><span>Items at or below their reorder level</span></div></div><div class="staff-alert-card critical"><i class="ti ti-flame"></i><div><strong id="critical-alert-count">0 critical items</strong><span>Stock is at 50% or less of reorder level</span></div></div></div>
+        <div class="staff-table-card"><table><thead><tr><th>Item Name</th><th>Current Stock</th><th>Reorder Level</th><th>Status</th></tr></thead><tbody id="low-stock-tbody"></tbody></table></div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-stock-adjustments">
+        <div class="staff-grid staff-adjustment-layout">
+          <form class="staff-card staff-form-card" id="adjustment-form"><div class="staff-card-header"><div><h2>Record Stock Adjustment</h2><p>Damaged, expired, or corrected inventory</p></div></div>
+            <label>Item Name<select id="adjustment-item" required></select></label>
+            <label>Current Stock<input id="adjustment-current-stock" type="text" readonly></label>
+            <div class="staff-form-row"><label>Adjustment Type<select id="adjustment-type" required><option value="">Select type</option><option>Damaged</option><option>Expired</option><option>Correction</option></select></label><label>Quantity<input id="adjustment-quantity" type="number" step="0.01" placeholder="Enter quantity" required></label></div>
+            <label>Reason<textarea id="adjustment-reason" rows="3" placeholder="Explain why this adjustment is needed" required></textarea></label>
+            <div class="staff-form-actions"><button type="button" class="staff-btn secondary" id="adjustment-cancel">Cancel</button><button type="submit" class="staff-btn primary"><i class="ti ti-device-floppy"></i> Save Adjustment</button></div>
+          </form>
+          <div class="staff-card"><div class="staff-card-header"><div><h2>Adjustment History</h2><p>Most recent inventory corrections</p></div></div><div id="adjustment-history" class="staff-feed"></div></div>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-pending-deliveries">
+        <div class="staff-table-card"><table><thead><tr><th>Delivery ID</th><th>Supplier</th><th>Purchase Order</th><th>Item</th><th>Expected Qty</th><th>Status</th><th>Action</th></tr></thead><tbody id="pending-deliveries-tbody"></tbody></table></div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-receive-deliveries">
+        <div class="staff-grid staff-receive-grid">
+          <div class="staff-card scanner-card"><div class="scanner-icon"><i class="ti ti-camera"></i></div><h2>Scan Delivery QR Code</h2><p>Scan to retrieve delivery details. Scanning does not complete receipt.</p><button class="staff-btn primary" id="open-camera"><i class="ti ti-camera"></i> Open Camera</button><div id="staff-qr-reader" hidden></div><div class="staff-or"><span>OR</span></div><label class="delivery-search-label">Enter Delivery ID<div><input id="delivery-id-input" type="text" placeholder="DEL-001 or PO number"><button class="staff-btn secondary" id="delivery-search-button" type="button"><i class="ti ti-search"></i> Search</button></div></label></div>
+          <div class="staff-card delivery-placeholder" id="delivery-placeholder"><i class="ti ti-package-import"></i><h2>Delivery information will appear here</h2><p>Scan a QR code or search a Delivery ID to begin verification.</p></div>
+          <form class="staff-card delivery-verification" id="delivery-verification" hidden>
+            <div class="staff-card-header"><div><h2>Delivery Information</h2><p id="verify-delivery-status">Pending verification</p></div><span class="staff-badge pending">Pending</span></div>
+            <div class="delivery-info-grid"><div><span>Delivery ID</span><strong id="verify-delivery-id">—</strong></div><div><span>Purchase Order</span><strong id="verify-po-number">—</strong></div><div><span>Supplier</span><strong id="verify-supplier">—</strong></div><div><span>Expected Item</span><strong id="verify-item">—</strong></div></div>
+            <div class="delivery-item-row"><div><span>Item Name</span><strong id="verify-item-name">—</strong></div><div><span>Expected Quantity</span><strong id="verify-expected-quantity">—</strong></div></div>
+            <div class="verification-fields"><label>Received Quantity<input id="received-quantity" type="number" min="0" step="0.01" required></label><label>Condition<select id="delivery-condition" required><option value="">Select condition</option><option>Good Condition</option><option>Damaged</option><option>Partial Delivery</option></select></label></div>
+            <fieldset><legend>Decision</legend><label><input type="radio" name="delivery-decision" value="complete" required> Complete Delivery</label><label><input type="radio" name="delivery-decision" value="partial"> Partial Delivery</label><label><input type="radio" name="delivery-decision" value="reject"> Reject Delivery</label></fieldset>
+            <div class="staff-form-actions"><button type="button" class="staff-btn secondary" id="delivery-cancel">Cancel</button><button type="submit" class="staff-btn primary"><i class="ti ti-check"></i> Confirm Receipt</button></div>
+          </form>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-delivery-history">
+        <div class="staff-toolbar"><div class="staff-search"><i class="ti ti-search"></i><input id="history-search" type="search" placeholder="Search delivery, supplier, or PO"></div><select id="history-filter"><option value="all">All statuses</option><option>Delivered</option><option>Partial</option><option>Rejected</option></select><select id="history-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></div>
+        <div class="staff-table-card"><table><thead><tr><th>Delivery ID</th><th>Supplier</th><th>Purchase Order</th><th>Status</th><th>Date Received</th><th>Received By</th></tr></thead><tbody id="delivery-history-tbody"></tbody></table></div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-inventory-reports">
+        <div class="staff-report-header"><div><h2>Inventory Report</h2><p>Current stock position and reorder risk</p></div><div><button class="staff-btn secondary" data-export="inventory-pdf"><i class="ti ti-file-type-pdf"></i> Export PDF</button><button class="staff-btn primary" data-export="inventory-excel"><i class="ti ti-file-spreadsheet"></i> Export Excel</button></div></div><div class="staff-table-card"><table><thead><tr><th>Item ID</th><th>Item</th><th>Stock</th><th>Reorder Level</th><th>Status</th></tr></thead><tbody id="inventory-report-tbody"></tbody></table></div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-receiving-reports">
+        <div class="staff-report-header"><div><h2>Receiving Report</h2><p>Completed, partial, and rejected deliveries</p></div><div><button class="staff-btn secondary" data-export="receiving-pdf"><i class="ti ti-file-type-pdf"></i> Export PDF</button><button class="staff-btn primary" data-export="receiving-excel"><i class="ti ti-file-spreadsheet"></i> Export Excel</button></div></div><div class="staff-table-card"><table><thead><tr><th>Delivery</th><th>Supplier</th><th>PO</th><th>Received Qty</th><th>Status</th><th>Date</th></tr></thead><tbody id="receiving-report-tbody"></tbody></table></div>
+      </section>
+
+    </div>
+  </main>
+</div>
+<div class="staff-toast" id="staff-toast"><i class="ti ti-circle-check"></i><span></span></div>
+</body>
+</html>

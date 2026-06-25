@@ -1,0 +1,24 @@
+"
+Read as you login your manager account
+
+This is already a fixed and pre-created account of the manager. Created by an Restaurant Owner.
+
+username: "mgr.primary"
+password: "BMR_Primary@2026",
+
+Backup_Account
+username: "mgr.backup" 
+password: "BMR_Backup@2026"
+
+"
+
+" To have an account on both portal supplier and staff, you have to open the portal of manager
+and create their an account. And just manually email to them their assigned accounts. To maintain
+the security of our accounts, we will be changing the password of supplier or they are required to
+change their password everymonth."
+
+" 
+If any further concerns persist regarding on their accounts they can click the contact support below the system
+all of the contact information of the restaurant is being written down.
+
+"
