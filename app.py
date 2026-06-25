@@ -975,7 +975,14 @@ def initialize_app():
                 role="staff",
                 password_changed_at=None
             ))
-            db.session.commit()
+        if not User.query.filter_by(username="supplier").first():
+            db.session.add(User(
+                username="supplier",
+                password_hash=generate_password_hash("Supplier@2026"),
+                role="supplier",
+                password_changed_at=None
+            ))
+        db.session.commit()
 
 initialize_app()
 

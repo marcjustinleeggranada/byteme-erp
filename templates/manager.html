@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 
 {% if not is_manager %}<script src="https://unpkg.com/html5-qrcode"></script>{% endif %}
-<script src="{{ url_for('static', filename='js/script.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/script.js') }}"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   

@@ -25,9 +25,12 @@
     "user-management": "User Management"
   };
 
-  const isManager =
-    document.body.dataset.manager === "true" ||
-    !!document.getElementById("screen-purchase-orders");
+  function isManager() {
+    return (
+      (document.body && document.body.dataset.manager === "true") ||
+      !!document.getElementById("screen-purchase-orders")
+    );
+  }
 
   function $(id) {
     return document.getElementById(id);
@@ -146,7 +149,7 @@
       })
     ];
 
-    if (isManager) {
+    if (isManager()) {
       requests.push(
         apiGet("/api/deliveries").then(function (data) {
           state.deliveries = data;
@@ -287,7 +290,7 @@
           (level.label === "Low" ? "#a32d2d" : "#3b6d11") +
           ';"></div></div></td>';
 
-        if (!isManager) {
+        if (!isManager()) {
           row +=
             '<td><button class="btn btn-xs" onclick="window.adjustStock(' +
             item.id +
@@ -453,7 +456,7 @@
   }
 
   function renderNotifications() {
-    if (!isManager) return;
+    if (!isManager()) return;
     const inTransit = state.deliveries.filter(function (delivery) {
       return delivery.status === "In Transit";
     });
@@ -763,7 +766,7 @@
   function renderAll() {
     renderDashboard();
     renderInventory();
-    if (isManager) {
+    if (isManager()) {
       renderPurchaseOrders();
       renderDeliveries();
       renderSuppliersList();
@@ -799,7 +802,7 @@
     });
     if (navEl) navEl.classList.add("active");
 
-    const title = isManager && screenId === "inventory" ? "Inventory Monitoring" : SCREEN_TITLES[screenId];
+    const title = isManager() && screenId === "inventory" ? "Inventory Monitoring" : SCREEN_TITLES[screenId];
     setText("page-title", title || "Dashboard Overview");
 
     closeMobileSidebar();
@@ -856,7 +859,7 @@
   };
 
   window.submitManualPO = async function () {
-    if (!isManager) return;
+    if (!isManager()) return;
     const select = $("manual-po-item");
     const qtyInput = $("manual-po-qty");
     if (!select || !qtyInput) return;
@@ -918,7 +921,7 @@
   };
 
   window.addInventoryItem = async function () {
-    if (isManager) return;
+    if (isManager()) return;
     const name = ($("new-item-name") && $("new-item-name").value.trim()) || "";
     const stock = Number($("new-item-stock") && $("new-item-stock").value) || 0;
     const threshold = Number($("new-item-threshold") && $("new-item-threshold").value) || 0;
@@ -951,7 +954,7 @@
   };
 
   window.startQRScanner = async function () {
-    if (isManager || typeof Html5Qrcode === "undefined") return;
+    if (isManager() || typeof Html5Qrcode === "undefined") return;
     const reader = $("qr-reader");
     const container = $("qr-reader-container");
     const result = $("delivery-result");
@@ -1084,7 +1087,7 @@
   };
 
   window.saveSupplier = async function () {
-    if (!isManager) return;
+    if (!isManager()) return;
     const editId = ($("supplier-edit-id") && $("supplier-edit-id").value) || "";
     const name = ($("supplier-name") && $("supplier-name").value.trim()) || "";
     const email = ($("supplier-email") && $("supplier-email").value.trim()) || "";
@@ -1232,7 +1235,7 @@
   };
 
   window.adjustStock = async function (itemId) {
-    if (isManager) return;
+    if (isManager()) return;
     const item = state.inventory.find(function (entry) {
       return entry.id === itemId;
     });
@@ -1286,7 +1289,7 @@
 
   document.addEventListener("DOMContentLoaded", async function () {
     bindGlobalEvents();
-    if (!isManager && SCREEN_TITLES.inventory) {
+    if (!isManager() && SCREEN_TITLES.inventory) {
       SCREEN_TITLES.inventory = "Inventory";
     }
     try {
