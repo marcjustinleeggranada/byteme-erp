@@ -142,7 +142,7 @@ def sync_low_stock_alerts():
         
         if not existing_po:
             # Generate a clean, unique PO ID using the current timestamp
-            po_id = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            po_id = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}-{item.id}"
             fallback_supplier = item.supplier_name if item.supplier_name else "Default Supplier"
             
             # Restock quantity defaults to double the safety threshold (or at least 50 units)
@@ -175,6 +175,130 @@ def sync_low_stock_alerts():
             db.session.add(auto_log)
 
     # Commit any newly generated draft orders to the database
+    db.session.commit()
+
+def seed_demo_data():
+    """Populate sample suppliers, inventory, POs, and activity for first-run demos."""
+    if Inventory.query.first():
+        return
+
+    suppliers = [
+        Supplier(
+            name="Metro Meats Supply",
+            email="orders@metromeats.ph",
+            phone="+63 917 555 0101",
+            catalog=json.dumps([
+                {"itemName": "Beef Ribs", "price": 480},
+                {"itemName": "Chicken Breast", "price": 220},
+                {"itemName": "Pork Belly", "price": 350},
+            ]),
+        ),
+        Supplier(
+            name="Fresh Harvest Trading",
+            email="sales@freshharvest.ph",
+            phone="+63 918 555 0202",
+            catalog=json.dumps([
+                {"itemName": "Roma Tomatoes", "price": 85},
+                {"itemName": "Yellow Onions", "price": 55},
+                {"itemName": "Garlic", "price": 180},
+            ]),
+        ),
+        Supplier(
+            name="Golden Grain Co.",
+            email="procurement@goldengrain.ph",
+            phone="+63 919 555 0303",
+            catalog=json.dumps([
+                {"itemName": "Jasmine Rice", "price": 52},
+                {"itemName": "Cooking Oil", "price": 95},
+                {"itemName": "All-Purpose Flour", "price": 48},
+            ]),
+        ),
+    ]
+    for supplier in suppliers:
+        db.session.add(supplier)
+
+    inventory_items = [
+        Inventory(name="Beef Ribs", stock=18, threshold=25, unit="kg", supplier_name="Metro Meats Supply"),
+        Inventory(name="Chicken Breast", stock=42, threshold=30, unit="kg", supplier_name="Metro Meats Supply"),
+        Inventory(name="Roma Tomatoes", stock=8, threshold=15, unit="kg", supplier_name="Fresh Harvest Trading"),
+        Inventory(name="Yellow Onions", stock=22, threshold=20, unit="kg", supplier_name="Fresh Harvest Trading"),
+        Inventory(name="Jasmine Rice", stock=12, threshold=25, unit="kg", supplier_name="Golden Grain Co."),
+        Inventory(name="Cooking Oil", stock=6, threshold=10, unit="L", supplier_name="Golden Grain Co."),
+        Inventory(name="Garlic", stock=3, threshold=5, unit="kg", supplier_name="Fresh Harvest Trading"),
+    ]
+    for item in inventory_items:
+        db.session.add(item)
+    db.session.commit()
+
+    today = datetime.now().strftime("%B %d, %Y")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%B %d, %Y")
+
+    sample_orders = [
+        PurchaseOrder(
+            id="PO-20260620001",
+            item_name="Chicken Breast",
+            qty=40,
+            unit="kg",
+            supplier="Metro Meats Supply",
+            total=8800,
+            status="Transmitted",
+            type="Manual Request",
+            date=yesterday,
+        ),
+        PurchaseOrder(
+            id="PO-20260618001",
+            item_name="Yellow Onions",
+            qty=30,
+            unit="kg",
+            supplier="Fresh Harvest Trading",
+            total=1650,
+            status="Delivered",
+            type="Manual Request",
+            date=(datetime.now() - timedelta(days=3)).strftime("%B %d, %Y"),
+        ),
+        PurchaseOrder(
+            id="PO-20260615001",
+            item_name="All-Purpose Flour",
+            qty=50,
+            unit="kg",
+            supplier="Golden Grain Co.",
+            total=2400,
+            status="Rejected",
+            type="Manual Request",
+            date=(datetime.now() - timedelta(days=5)).strftime("%B %d, %Y"),
+        ),
+    ]
+    for order in sample_orders:
+        db.session.add(order)
+
+    db.session.add(ReceivingRecord(
+        delivery_id="DEL-062001",
+        po_id="PO-20260618001",
+        supplier="Fresh Harvest Trading",
+        item_name="Yellow Onions",
+        expected_quantity=30,
+        received_quantity=30,
+        condition="Good Condition",
+        status="Delivered",
+        received_by="staff",
+        date_received=yesterday + " · 02:15 PM",
+    ))
+
+    activity_entries = [
+        ActivityLog(event="System Initialized", item="Demo Data", reference="SEED-001", status="Complete", time="08:00"),
+        ActivityLog(event="Delivery Received", item="Yellow Onions", reference="DEL-062001", status="Delivered", time="14:15"),
+        ActivityLog(event="Purchase Order Approved", item="Chicken Breast", reference="PO-20260620001", status="Transmitted", time="11:30"),
+        ActivityLog(event="Manual PO Queued", item="Chicken Breast", reference="PO-20260620001", status="Awaiting approval", time="10:45"),
+        ActivityLog(event="Low Stock Detected", item="Beef Ribs", reference="18 kg remaining", status="Alert", time="09:20"),
+        ActivityLog(event="Low Stock Detected", item="Garlic", reference="3 kg remaining", status="Critical", time="09:18"),
+        ActivityLog(event="Purchase Order Rejected", item="All-Purpose Flour", reference="PO-20260615001", status="Rejected", time="16:40"),
+        ActivityLog(event="Supplier Registered", item="Metro Meats Supply", reference="SUP-001", status="Active", time="08:05"),
+        ActivityLog(event="Supplier Registered", item="Fresh Harvest Trading", reference="SUP-002", status="Active", time="08:06"),
+        ActivityLog(event="Supplier Registered", item="Golden Grain Co.", reference="SUP-003", status="Active", time="08:07"),
+    ]
+    for entry in activity_entries:
+        db.session.add(entry)
+
     db.session.commit()
 
 # page redirection
@@ -511,7 +635,7 @@ def check_and_auto_reorder(item_id):
             # Generate a new Purchase Order entry
             # Finding a fallback supplier if none is attached to the item catalog description
             supplier_name = item.supplier_name if item.supplier_name else "Default Supplier"
-            po_id = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            po_id = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}-{item.id}"
             
             price = get_supplier_price(supplier_name, item.name)
 
@@ -967,6 +1091,7 @@ def save_delivery():
 def initialize_app():
     with app.app_context():
         ensure_user_schema()
+        seed_demo_data()
         sync_low_stock_alerts()
         if not User.query.filter_by(username="staff").first():
             db.session.add(User(
