@@ -1,17 +1,34 @@
 #qr-reader-container {
-  height: 190px;
+  min-height: 190px;
+  height: auto;
+  padding: 22px 16px;
   border: 1px dashed #b4b2a9;
-  border-radius: 12px;
+  border-radius: 10px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
+  text-align: center;
   cursor: pointer;
   transition: 0.2s;
-  background: #fdfdfb;
+  background: rgba(255, 253, 248, 0.96);
 }
 
-#qr-reader-container:hover { background: #f5f5f0; }
-#qr-reader-container .ti { font-size: 36px; color: #707e74; margin-bottom: 12px; }
-#qr-reader-container h3 { font-size: 14px; font-weight: 500; color: #5f5e5a; }
-#qr-reader-container p { margin-top: 6px; font-size: 12px; color: #b4b2a9; }
+#qr-reader-container:hover { background: #fff4e7; border-color: #8a2e25; }
+#qr-reader-container .ti { font-size: 36px; color: #7a2d28; margin-bottom: 12px; }
+#qr-reader-container h3 {
+  max-width: 100%;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #251b17;
+  overflow-wrap: anywhere;
+}
+#qr-reader-container p {
+  max-width: 100%;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #78675d;
+  overflow-wrap: anywhere;
+}
