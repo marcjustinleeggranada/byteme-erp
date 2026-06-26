@@ -7,8 +7,9 @@
     "inventory-list": { title: "Inventory List", subtitle: "Browse and filter current stock levels" },
     "low-stock": { title: "Low Stock Items", subtitle: "Items at or below reorder level" },
     "stock-adjustments": { title: "Stock Adjustments", subtitle: "Record damaged, expired, or corrected inventory" },
+    "purchase-requests": { title: "Purchase Requests", subtitle: "Submit and track restock requests" },
     "pending-deliveries": { title: "Pending Deliveries", subtitle: "Deliveries awaiting receipt" },
-    "receive-deliveries": { title: "Receive Deliveries", subtitle: "Scan or search to verify incoming stock" },
+    "receive-deliveries": { title: "Scan Delivery QR Code", subtitle: "Scan or search to verify incoming stock" },
     "delivery-history": { title: "Delivery History", subtitle: "Completed, partial, and rejected receipts" },
     "inventory-reports": { title: "Inventory Report", subtitle: "Current stock position and reorder risk" },
     "receiving-reports": { title: "Receiving Report", subtitle: "Completed, partial, and rejected deliveries" }
@@ -17,6 +18,7 @@
   var inventory = [];
   var adjustments = [];
   var deliveries = [];
+  var purchaseRequests = [];
   var activity = [];
   var inventoryPage = 1;
   var currentDelivery = null;
@@ -85,6 +87,7 @@
       "low-stock": "Low Stock",
       critical: "Critical",
       pending: "Pending",
+      approved: "Approved",
       delivered: "Delivered",
       partial: "Partial",
       rejected: "Rejected"
@@ -94,9 +97,22 @@
 
   function statusBadge(status, text) {
     var cls = status.toLowerCase().replace(/\s+/g, "-");
-    if (cls === "delivered") cls = "delivered";
+    if (cls === "delivered" || cls === "approved") cls = "delivered";
     if (cls === "good-condition") cls = "in-stock";
     return '<span class="staff-badge ' + escapeHtml(cls) + '">' + escapeHtml(text || statusLabel(status)) + "</span>";
+  }
+
+  function isOutOfStock(item) {
+    return (Number(item.stock) || 0) <= 0;
+  }
+
+  function isCompletedDelivery(d) {
+    var s = (d.status || "").toLowerCase();
+    return s === "delivered" || s === "partial";
+  }
+
+  function isPendingRequest(r) {
+    return (r.status || "").toLowerCase() === "pending";
   }
 
   function isPendingDelivery(d) {
@@ -230,39 +246,29 @@
       });
   }
 
+  function loadPurchaseRequests() {
+    return apiFetch("/api/purchase-requests").then(function (data) {
+      purchaseRequests = Array.isArray(data) ? data : [];
+      return purchaseRequests;
+    });
+  }
+
   function renderDashboard() {
     var lowCount = inventory.filter(function (item) {
       var s = getStockStatus(item);
       return s === "low-stock" || s === "critical";
     }).length;
-    var pendingCount = deliveries.filter(isPendingDelivery).length;
+    var pendingRequestCount = purchaseRequests.filter(isPendingRequest).length;
     var todayCount = deliveries.filter(function (d) {
-      return isToday(d.dateReceived) && ["Delivered", "Partial"].indexOf(d.status) !== -1;
+      return isToday(d.dateReceived) && isCompletedDelivery(d);
     }).length;
+    var completedCount = deliveries.filter(isCompletedDelivery).length;
 
     if ($("kpi-total-items")) $("kpi-total-items").textContent = inventory.length;
     if ($("kpi-low-items")) $("kpi-low-items").textContent = lowCount;
-    if ($("kpi-pending-deliveries")) $("kpi-pending-deliveries").textContent = pendingCount;
+    if ($("kpi-pending-requests")) $("kpi-pending-requests").textContent = pendingRequestCount;
     if ($("kpi-today-deliveries")) $("kpi-today-deliveries").textContent = todayCount;
-    if ($("kpi-recent-adjustments")) $("kpi-recent-adjustments").textContent = adjustments.length ? Math.min(adjustments.length, 99) : 0;
-
-    var dashAdj = $("dashboard-adjustments");
-    if (dashAdj) {
-      if (!adjustments.length) {
-        dashAdj.innerHTML = emptyFeed("No adjustments recorded yet.");
-      } else {
-        dashAdj.innerHTML = adjustments.slice(0, 5).map(function (adj) {
-          var qty = Number(adj.quantity);
-          var sign = qty >= 0 ? "+" : "";
-          return feedItem(
-            "ti-adjustments",
-            adj.itemName + " · " + adj.type,
-            sign + formatQty(qty) + " · " + adj.reason,
-            adj.date
-          );
-        }).join("");
-      }
-    }
+    if ($("kpi-completed-deliveries")) $("kpi-completed-deliveries").textContent = completedCount;
 
     var actFeed = $("staff-activity-feed");
     if (actFeed) {
@@ -271,10 +277,79 @@
       } else {
         actFeed.innerHTML = activity.slice(0, 6).map(function (log) {
           var icon = "ti-activity";
-          if ((log.event || "").toLowerCase().indexOf("delivery") !== -1) icon = "ti-truck-delivery";
-          if ((log.event || "").toLowerCase().indexOf("adjustment") !== -1) icon = "ti-adjustments";
+          var eventLower = (log.event || "").toLowerCase();
+          if (eventLower.indexOf("delivery") !== -1) icon = "ti-truck-delivery";
+          if (eventLower.indexOf("adjustment") !== -1) icon = "ti-adjustments";
+          if (eventLower.indexOf("purchase") !== -1) icon = "ti-file-plus";
           return feedItem(icon, log.event, (log.item || "") + (log.reference ? " · " + log.reference : ""), log.time);
         }).join("");
+      }
+    }
+
+    var alertsFeed = $("dashboard-inventory-alerts");
+    if (alertsFeed) {
+      var alertItems = inventory.filter(function (item) {
+        return isOutOfStock(item) || getStockStatus(item) !== "in-stock";
+      }).slice(0, 6);
+      if (!alertItems.length) {
+        alertsFeed.innerHTML = emptyFeed("No inventory alerts right now.");
+      } else {
+        alertsFeed.innerHTML = alertItems.map(function (item) {
+          var out = isOutOfStock(item);
+          var icon = out ? "ti-ban" : "ti-alert-triangle";
+          var label = out ? "Out of stock" : statusLabel(getStockStatus(item));
+          return feedItem(
+            icon,
+            item.name,
+            label + " · " + formatQty(item.stock, item.unit) + " on hand",
+            "Reorder: " + formatQty(item.threshold, item.unit)
+          );
+        }).join("");
+      }
+    }
+
+    var pendingFeed = $("dashboard-pending-deliveries");
+    if (pendingFeed) {
+      var pendingList = deliveries.filter(isPendingDelivery).slice(0, 5);
+      if (!pendingList.length) {
+        pendingFeed.innerHTML = emptyFeed("No pending deliveries right now.");
+      } else {
+        pendingFeed.innerHTML = pendingList.map(function (d) {
+          return feedItem(
+            "ti-truck-loading",
+            d.deliveryId + " · " + d.supplier,
+            d.itemName + " · " + formatQty(d.expectedQuantity, d.unit),
+            d.status || "Pending"
+          );
+        }).join("");
+      }
+    }
+
+    var summaryFeed = $("dashboard-request-summary");
+    if (summaryFeed) {
+      if (!purchaseRequests.length) {
+        summaryFeed.innerHTML = emptyFeed("No purchase requests submitted yet.");
+      } else {
+        var counts = { pending: 0, approved: 0, rejected: 0 };
+        purchaseRequests.forEach(function (r) {
+          var s = (r.status || "").toLowerCase();
+          if (s === "approved") counts.approved++;
+          else if (s === "rejected") counts.rejected++;
+          else counts.pending++;
+        });
+        var summaryHtml =
+          '<div class="feed-item"><div class="feed-icon"><i class="ti ti-clock"></i></div><div class="feed-copy"><strong>Pending</strong><span>' + counts.pending + " request" + (counts.pending === 1 ? "" : "s") + " awaiting review</span></div></div>" +
+          '<div class="feed-item"><div class="feed-icon"><i class="ti ti-circle-check"></i></div><div class="feed-copy"><strong>Approved</strong><span>' + counts.approved + " request" + (counts.approved === 1 ? "" : "s") + " approved</span></div></div>" +
+          '<div class="feed-item"><div class="feed-icon"><i class="ti ti-x"></i></div><div class="feed-copy"><strong>Rejected</strong><span>' + counts.rejected + " request" + (counts.rejected === 1 ? "" : "s") + " rejected</span></div></div>";
+        var recent = purchaseRequests.slice(0, 3).map(function (r) {
+          return feedItem(
+            "ti-file-plus",
+            r.itemName + " · " + formatQty(r.qty, r.unit),
+            r.id + " · " + (r.status || "Pending"),
+            r.date
+          );
+        }).join("");
+        summaryFeed.innerHTML = summaryHtml + recent;
       }
     }
   }
@@ -512,12 +587,46 @@
     }).join("");
   }
 
+  function renderPurchaseRequestItemSelect() {
+    var select = $("pr-item");
+    if (!select) return;
+    var current = select.value;
+    select.innerHTML = '<option value="">Select item</option>' + inventory.map(function (item) {
+      return '<option value="' + item.id + '" data-unit="' + escapeHtml(item.unit || "pcs") + '">' + escapeHtml(item.name) + "</option>";
+    }).join("");
+    if (current) select.value = current;
+  }
+
+  function renderPurchaseRequests() {
+    var tbody = $("purchase-requests-tbody");
+    if (!tbody) return;
+    if (!purchaseRequests.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No purchase requests submitted yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = purchaseRequests.map(function (r) {
+      var badgeStatus = (r.status || "Pending").toLowerCase();
+      return (
+        "<tr>" +
+        "<td>" + escapeHtml(r.id) + "</td>" +
+        "<td>" + escapeHtml(r.itemName) + "</td>" +
+        "<td>" + escapeHtml(formatQty(r.qty, r.unit)) + "</td>" +
+        "<td>" + statusBadge(badgeStatus, r.status) + "</td>" +
+        "<td>" + escapeHtml(r.date || "—") + "</td>" +
+        "<td>" + escapeHtml(r.reviewNote || "—") + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+  }
+
   function renderAll() {
     renderDashboard();
     renderInventoryList();
     renderLowStock();
     renderAdjustmentItemSelect();
     renderAdjustmentHistory();
+    renderPurchaseRequestItemSelect();
+    renderPurchaseRequests();
     renderPendingDeliveries();
     renderDeliveryHistory();
     renderInventoryReport();
@@ -529,10 +638,65 @@
       loadInventory(),
       loadAdjustments(),
       loadDeliveries(),
+      loadPurchaseRequests(),
       loadActivity()
     ]).then(renderAll).catch(function (err) {
       showToast(err.message || "Failed to load portal data.", "error");
     });
+  }
+
+  function setupPurchaseRequestForm() {
+    var form = $("purchase-request-form");
+    var itemSelect = $("pr-item");
+    var cancelBtn = $("pr-cancel");
+
+    if (itemSelect) {
+      itemSelect.addEventListener("change", function () {
+        var option = itemSelect.options[itemSelect.selectedIndex];
+        var unitInput = $("pr-unit");
+        if (unitInput && option) {
+          unitInput.value = option.getAttribute("data-unit") || "pcs";
+        }
+      });
+    }
+
+    if (cancelBtn && form) {
+      cancelBtn.addEventListener("click", function () {
+        form.reset();
+        if ($("pr-unit")) $("pr-unit").value = "pcs";
+      });
+    }
+
+    if (form) {
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var item = inventory.find(function (i) { return String(i.id) === String($("pr-item") && $("pr-item").value); });
+        if (!item) {
+          showToast("Select an inventory item.", "error");
+          return;
+        }
+        var payload = {
+          itemName: item.name,
+          qty: parseFloat($("pr-qty") && $("pr-qty").value) || 0,
+          unit: ($("pr-unit") && $("pr-unit").value || "pcs").trim() || "pcs",
+          reason: ($("pr-reason") && $("pr-reason").value || "").trim()
+        };
+        if (!payload.qty || payload.qty <= 0 || !payload.reason) {
+          showToast("Enter quantity and reason.", "error");
+          return;
+        }
+        apiFetch("/api/purchase-requests", { method: "POST", body: JSON.stringify(payload) })
+          .then(function () {
+            showToast("Purchase request submitted.");
+            form.reset();
+            if ($("pr-unit")) $("pr-unit").value = "pcs";
+            return refreshData();
+          })
+          .catch(function (err) {
+            showToast(err.message || "Could not submit request.", "error");
+          });
+      });
+    }
   }
 
   function setupAdjustmentForm() {
@@ -791,6 +955,7 @@
     setupNavGroups();
     setupMobileNav();
     setupAdjustmentForm();
+    setupPurchaseRequestForm();
     setupDeliveryVerification();
     setupQrScanner();
     setupInventoryControls();

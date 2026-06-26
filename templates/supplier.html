@@ -6,19 +6,67 @@
   <title>Byte Me — Supplier Portal</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='staff-portal.css') }}">
+  <style>
+    .staff-confirm-backdrop { position:fixed; inset:0; z-index:900; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(20,35,28,.38); }
+    .staff-confirm-backdrop[hidden] { display:none; }
+    .staff-confirm-card { width:min(420px,100%); padding:22px; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 24px 60px rgba(18,32,25,.22); }
+    .staff-confirm-card h2 { color:var(--ink); font-size:14px; font-weight:650; margin-bottom:6px; }
+    .staff-confirm-card p { color:var(--muted); font-size:11px; line-height:1.55; margin-bottom:18px; }
+    .staff-confirm-actions { display:flex; justify-content:flex-end; gap:8px; }
+    .qr-preview-wrap { display:flex; flex-direction:column; align-items:center; gap:14px; padding:18px 0; }
+    .qr-preview-wrap canvas { border:1px solid var(--line); border-radius:10px; padding:10px; background:#fff; }
+    .qr-meta { text-align:center; }
+    .qr-meta strong { display:block; font-size:13px; margin-bottom:4px; }
+    .qr-meta span { color:var(--muted); font-size:10px; }
+    .company-info-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .company-info-grid div { display:flex; flex-direction:column; gap:4px; padding:10px; border:1px solid #e5e9e5; border-radius:8px; background:#fafbf9; }
+    .company-info-grid span { color:var(--muted); font-size:9px; }
+    .company-info-grid strong { font-size:11px; word-break:break-word; }
+    .summary-stat-row { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:4px; }
+    .summary-stat { padding:12px; border:1px solid var(--line); border-radius:10px; background:#fafbf9; text-align:center; }
+    .summary-stat span { display:block; color:var(--muted); font-size:9px; margin-bottom:6px; }
+    .summary-stat strong { font-size:20px; color:var(--sage-900); }
+    .po-actions { display:flex; gap:6px; flex-wrap:wrap; }
+    @media(max-width:760px){ .company-info-grid,.summary-stat-row{ grid-template-columns:1fr; } }
+  </style>
+  <script defer src="{{ url_for('static', filename='js/supplier-portal.js') }}"></script>
 </head>
-<body>
+<body data-username="{{ username }}">
 <div class="staff-app">
-  <aside class="staff-sidebar">
+  <aside class="staff-sidebar" id="supplier-sidebar">
     <div class="staff-brand"><div class="staff-brand-mark">B</div><div class="staff-brand-copy"><strong>Byte Me</strong><span>Supplier Portal</span></div></div>
     <nav class="staff-nav">
       <div class="staff-nav-label">Workspace</div>
-      <a class="staff-nav-item active" href="/supplier"><i class="ti ti-home"></i><span>Dashboard</span></a>
-      <div class="staff-nav-label">Settings</div>
-      <a class="staff-nav-item" href="/change-password"><i class="ti ti-key"></i><span>Change Password</span></a>
+      <button class="staff-nav-item active" data-title="Dashboard" data-screen="dashboard"><i class="ti ti-home"></i><span>Dashboard</span></button>
+
+      <div class="staff-nav-group">
+        <button class="staff-nav-item group-toggle" data-title="Purchase Orders"><i class="ti ti-file-invoice"></i><span>Purchase Orders</span><i class="ti ti-chevron-down group-arrow"></i></button>
+        <div class="staff-subnav">
+          <button data-screen="po-new">New Orders</button>
+          <button data-screen="po-accepted">Accepted Orders</button>
+          <button data-screen="po-rejected">Rejected Orders</button>
+        </div>
+      </div>
+
+      <div class="staff-nav-group">
+        <button class="staff-nav-item group-toggle" data-title="Deliveries"><i class="ti ti-truck-delivery"></i><span>Deliveries</span><i class="ti ti-chevron-down group-arrow"></i></button>
+        <div class="staff-subnav">
+          <button data-screen="generate-qr">Generate Delivery QR Code</button>
+          <button data-screen="delivery-history">Delivery History</button>
+        </div>
+      </div>
+
+      <button class="staff-nav-item" data-title="Support Request" data-screen="support"><i class="ti ti-headset"></i><span>Support Request</span></button>
     </nav>
-    <div class="staff-sidebar-footer"><a class="staff-nav-item" href="/logout"><i class="ti ti-logout"></i><span>Logout</span></a></div>
+    <div class="staff-sidebar-footer">
+      <div class="staff-nav-label">Settings</div>
+      <a class="staff-nav-item" data-title="Company Profile" href="/profile"><i class="ti ti-building-store"></i><span>Company Profile</span></a>
+      <a class="staff-nav-item" data-title="Change Password" href="/change-password"><i class="ti ti-key"></i><span>Change Password</span></a>
+      <a class="staff-nav-item" data-title="Logout" href="/logout"><i class="ti ti-logout"></i><span>Logout</span></a>
+    </div>
   </aside>
+  <div class="staff-sidebar-overlay" id="supplier-sidebar-overlay"></div>
+
   <main class="staff-main">
     {% if days_remaining <= 7 and days_remaining > 0 %}
     <div class="pw-expiry-banner {% if days_remaining <= 3 %}danger{% else %}warn{% endif %}">
@@ -26,17 +74,180 @@
       <span>Your password expires in <strong>{{ days_remaining }} day{% if days_remaining != 1 %}s{% endif %}</strong>. <a href="/change-password">Change it now</a> to avoid being locked out.</span>
     </div>
     {% endif %}
-    <header class="staff-topbar"><div class="staff-title-wrap"><div><h1>Supplier Dashboard</h1><p>Byte Me Restaurant procurement partner workspace</p></div></div><div class="staff-user"><div class="staff-user-copy"><strong>{{ username }}</strong><span>Supplier</span></div><div class="staff-avatar">S</div></div></header>
+    <header class="staff-topbar">
+      <div class="staff-title-wrap">
+        <button class="staff-menu-button" id="supplier-menu-button" aria-label="Toggle sidebar"><i class="ti ti-menu-2"></i></button>
+        <div><h1 id="supplier-page-title">Dashboard Overview</h1><p id="supplier-page-subtitle">Purchase orders, deliveries, and company activity</p></div>
+      </div>
+      <div class="staff-user">
+        <div class="staff-user-copy"><strong>{{ username }}</strong><span>Supplier</span></div>
+        <div class="staff-avatar" id="supplier-avatar">S</div>
+      </div>
+    </header>
+
     <div class="staff-content">
-      <section class="staff-screen active">
-        <div class="staff-card" style="max-width:720px">
-          <div class="staff-card-header"><div><h2>Welcome, {{ username }}</h2><p>Your supplier account is active.</p></div><i class="ti ti-building-store" style="font-size:28px;color:var(--sage-700)"></i></div>
-          <div class="supplier-security-note"><i class="ti ti-shield-lock"></i><span>For security purposes, users are required to update their password regularly. Usernames cannot be changed.</span></div>
-          <div style="margin-top:18px"><a class="staff-btn primary" href="/change-password"><i class="ti ti-key"></i> Change Password</a></div>
+      <section class="staff-screen active" id="supplier-screen-dashboard">
+        <div class="staff-kpi-grid">
+          <div class="staff-kpi alert"><span>New Purchase Orders</span><strong id="kpi-new-orders">0</strong><i class="ti ti-file-plus"></i></div>
+          <div class="staff-kpi"><span>Accepted Orders</span><strong id="kpi-accepted-orders">0</strong><i class="ti ti-circle-check"></i></div>
+          <div class="staff-kpi"><span>Pending Deliveries</span><strong id="kpi-pending-deliveries">0</strong><i class="ti ti-truck-loading"></i></div>
+          <div class="staff-kpi good"><span>Completed Deliveries</span><strong id="kpi-completed-deliveries">0</strong><i class="ti ti-package"></i></div>
+        </div>
+        <div class="staff-grid staff-grid-two">
+          <div class="staff-card">
+            <div class="staff-card-header"><div><h2>Recent Activities</h2><p>Latest procurement and delivery events</p></div></div>
+            <div id="supplier-activity-feed" class="staff-feed"></div>
+          </div>
+          <div class="staff-card">
+            <div class="staff-card-header"><div><h2>PO Summary</h2><p>Order status breakdown</p></div><button class="staff-link-button" data-screen="po-new">View orders</button></div>
+            <div class="summary-stat-row">
+              <div class="summary-stat"><span>New</span><strong id="dash-po-new">0</strong></div>
+              <div class="summary-stat"><span>Accepted</span><strong id="dash-po-accepted">0</strong></div>
+              <div class="summary-stat"><span>Rejected</span><strong id="dash-po-rejected">0</strong></div>
+            </div>
+          </div>
+        </div>
+        <div class="staff-grid staff-grid-two" style="margin-top:18px">
+          <div class="staff-card">
+            <div class="staff-card-header"><div><h2>Delivery Status</h2><p>Current shipment progress</p></div><button class="staff-link-button" data-screen="delivery-history">View history</button></div>
+            <div class="summary-stat-row">
+              <div class="summary-stat"><span>Pending</span><strong id="dash-delivery-pending">0</strong></div>
+              <div class="summary-stat"><span>In Transit</span><strong id="dash-delivery-transit">0</strong></div>
+              <div class="summary-stat"><span>Completed</span><strong id="dash-delivery-completed">0</strong></div>
+            </div>
+          </div>
+          <div class="staff-card">
+            <div class="staff-card-header"><div><h2>Company Information</h2><p>Your registered supplier profile</p></div><a class="staff-link-button" href="/profile">Edit profile</a></div>
+            <div class="company-info-grid" id="dashboard-company-info">
+              <div><span>Company Name</span><strong id="dash-company-name">—</strong></div>
+              <div><span>Supplier ID</span><strong id="dash-supplier-id">—</strong></div>
+              <div><span>Contact Person</span><strong id="dash-contact-person">—</strong></div>
+              <div><span>Email</span><strong id="dash-email">—</strong></div>
+              <div><span>Contact Number</span><strong id="dash-contact-number">—</strong></div>
+              <div><span>Business Address</span><strong id="dash-business-address">—</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="supplier-screen-po-new">
+        <div class="staff-toolbar">
+          <div class="staff-search"><i class="ti ti-search"></i><input id="po-new-search" type="search" placeholder="Search PO, item, or delivery ID"></div>
+        </div>
+        <div class="staff-table-card">
+          <table>
+            <thead><tr><th>PO #</th><th>Item</th><th>Quantity</th><th>Total</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+            <tbody id="po-new-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="supplier-screen-po-accepted">
+        <div class="staff-toolbar">
+          <div class="staff-search"><i class="ti ti-search"></i><input id="po-accepted-search" type="search" placeholder="Search PO, item, or delivery ID"></div>
+        </div>
+        <div class="staff-table-card">
+          <table>
+            <thead><tr><th>PO #</th><th>Item</th><th>Quantity</th><th>Total</th><th>Status</th><th>Delivery ID</th><th>Date</th><th>Actions</th></tr></thead>
+            <tbody id="po-accepted-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="supplier-screen-po-rejected">
+        <div class="staff-toolbar">
+          <div class="staff-search"><i class="ti ti-search"></i><input id="po-rejected-search" type="search" placeholder="Search PO or item"></div>
+        </div>
+        <div class="staff-table-card">
+          <table>
+            <thead><tr><th>PO #</th><th>Item</th><th>Quantity</th><th>Total</th><th>Status</th><th>Date</th></tr></thead>
+            <tbody id="po-rejected-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="supplier-screen-generate-qr">
+        <div class="staff-grid staff-receive-grid">
+          <div class="staff-card staff-form-card">
+            <div class="staff-card-header"><div><h2>Generate Delivery QR Code</h2><p>Create a scannable QR for accepted purchase orders</p></div></div>
+            <label>Select Accepted Purchase Order
+              <select id="qr-po-select"><option value="">Choose a purchase order</option></select>
+            </label>
+            <div class="staff-form-actions" style="justify-content:flex-start">
+              <button type="button" class="staff-btn primary" id="generate-qr-button"><i class="ti ti-qrcode"></i> Generate QR Code</button>
+            </div>
+            <div class="supplier-security-note"><i class="ti ti-info-circle"></i><span>QR codes are generated locally and saved in this browser for delivery history reference.</span></div>
+          </div>
+          <div class="staff-card">
+            <div class="staff-card-header"><div><h2>QR Preview</h2><p>Share this code with Byte Me receiving staff</p></div></div>
+            <div class="qr-preview-wrap" id="qr-preview-area">
+              <i class="ti ti-qrcode" style="font-size:48px;color:#b8c6be"></i>
+              <p class="empty-state" style="padding:0">Select an accepted order and generate a QR code.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="supplier-screen-delivery-history">
+        <div class="staff-toolbar">
+          <div class="staff-search"><i class="ti ti-search"></i><input id="delivery-history-search" type="search" placeholder="Search delivery ID, PO, or item"></div>
+          <select id="delivery-history-filter">
+            <option value="all">All statuses</option>
+            <option value="pending">Pending / In Transit</option>
+            <option value="completed">Completed</option>
+            <option value="generated">QR Generated (local)</option>
+          </select>
+        </div>
+        <div class="staff-table-card">
+          <table>
+            <thead><tr><th>Delivery ID</th><th>PO #</th><th>Item</th><th>Quantity</th><th>Status</th><th>Date</th><th>Source</th></tr></thead>
+            <tbody id="delivery-history-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="supplier-screen-support">
+        <div class="staff-grid staff-adjustment-layout">
+          <form class="staff-card staff-form-card" id="support-form">
+            <div class="staff-card-header"><div><h2>Submit Support Request</h2><p>Contact Byte Me procurement support</p></div></div>
+            <label>Category
+              <select id="support-category" required>
+                <option value="">Select category</option>
+                <option>Account Issue</option>
+                <option>Password Concern</option>
+                <option>Purchase Order Concern</option>
+                <option>Delivery Concern</option>
+                <option>Other</option>
+              </select>
+            </label>
+            <label>Subject<input id="support-subject" type="text" placeholder="Brief summary of your concern" required></label>
+            <label>Message<textarea id="support-message" rows="5" placeholder="Describe your issue in detail" required></textarea></label>
+            <div class="staff-form-actions">
+              <button type="button" class="staff-btn secondary" id="support-reset">Clear</button>
+              <button type="submit" class="staff-btn primary"><i class="ti ti-send"></i> Submit Request</button>
+            </div>
+          </form>
+          <div class="staff-card">
+            <div class="staff-card-header"><div><h2>Your Support Tickets</h2><p>Previously submitted requests</p></div></div>
+            <div id="support-ticket-list" class="staff-feed"></div>
+          </div>
         </div>
       </section>
     </div>
   </main>
 </div>
+
+<div class="staff-confirm-backdrop" id="supplier-confirm-modal" hidden>
+  <div class="staff-confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <h2 id="confirm-modal-title">Confirm action</h2>
+    <p id="confirm-modal-message">Are you sure?</p>
+    <div class="staff-confirm-actions">
+      <button type="button" class="staff-btn secondary" id="confirm-modal-cancel">Cancel</button>
+      <button type="button" class="staff-btn primary" id="confirm-modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="staff-toast" id="supplier-toast"><i class="ti ti-circle-check"></i><span></span></div>
 </body>
 </html>

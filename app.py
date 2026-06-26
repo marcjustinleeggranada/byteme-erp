@@ -44,7 +44,9 @@ class ManagerCredential(db.Model):
     password_changed_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
 
 PASSWORD_EXPIRY_DAYS = 30
-PASSWORD_REQUIREMENT_MESSAGE = "Password must contain at least 12 characters, including uppercase, lowercase, number, and special character."
+PASSWORD_MIN_LENGTH = 10
+PASSWORD_HISTORY_LIMIT = 3
+PASSWORD_REQUIREMENT_MESSAGE = "Password must contain at least 10 characters, including uppercase, lowercase, number, and special character."
 LOGIN_ERROR_MESSAGE = "Please enter the correct username and password."
 
 class Inventory(db.Model):
@@ -112,6 +114,54 @@ class ReceivingRecord(db.Model):
     status = db.Column(db.String(50), nullable=False)
     received_by = db.Column(db.String(120), nullable=False)
     date_received = db.Column(db.String(80), nullable=False)
+
+class ManagerProfile(db.Model):
+    username = db.Column(db.String(120), primary_key=True)
+    full_name = db.Column(db.String(120), default="")
+    email = db.Column(db.String(120), default="")
+    contact_number = db.Column(db.String(50), default="")
+    avatar_data = db.Column(db.Text, default="")
+
+class UserProfile(db.Model):
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), primary_key=True)
+    full_name = db.Column(db.String(120), default="")
+    email = db.Column(db.String(120), default="")
+    contact_number = db.Column(db.String(50), default="")
+    avatar_data = db.Column(db.Text, default="")
+    company_name = db.Column(db.String(120), default="")
+    contact_person = db.Column(db.String(120), default="")
+    business_address = db.Column(db.Text, default="")
+    supplier_id = db.Column(db.String(20), default="")
+    logo_data = db.Column(db.Text, default="")
+
+class PasswordHistory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    account_type = db.Column(db.String(20), nullable=False)
+    account_key = db.Column(db.String(120), nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+class PurchaseRequest(db.Model):
+    id = db.Column(db.String(50), primary_key=True)
+    item_name = db.Column(db.String(100), nullable=False)
+    qty = db.Column(db.Float, nullable=False)
+    unit = db.Column(db.String(20))
+    reason = db.Column(db.Text)
+    requested_by = db.Column(db.String(120), nullable=False)
+    status = db.Column(db.String(50), default="Pending")
+    date = db.Column(db.String(80))
+    review_note = db.Column(db.Text)
+
+class SupportRequest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    ticket_id = db.Column(db.String(20), unique=True, nullable=False)
+    username = db.Column(db.String(120), nullable=False)
+    role = db.Column(db.String(50), nullable=False)
+    category = db.Column(db.String(50), nullable=False)
+    subject = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(50), default="Open")
+    date = db.Column(db.String(80))
 
 # --- HELPER FUNCTION: Get Price ---
 def get_supplier_price(supplier_name, item_name):
@@ -241,7 +291,7 @@ def seed_demo_data():
             unit="kg",
             supplier="Metro Meats Supply",
             total=8800,
-            status="Transmitted",
+            status="Waiting for Supplier",
             type="Manual Request",
             date=yesterday,
         ),
@@ -299,6 +349,24 @@ def seed_demo_data():
     for entry in activity_entries:
         db.session.add(entry)
 
+    db.session.add(PurchaseRequest(
+        id="PR-20260624001", item_name="Garlic", qty=10, unit="kg",
+        reason="Critical stock level — needed for weekend service.",
+        requested_by="staff", status="Pending",
+        date=(datetime.now() - timedelta(days=1)).strftime("%B %d, %Y · %I:%M %p"),
+    ))
+    db.session.add(PurchaseRequest(
+        id="PR-20260622001", item_name="Cooking Oil", qty=20, unit="L",
+        reason="Restock for frying station.", requested_by="staff", status="Approved",
+        date=(datetime.now() - timedelta(days=3)).strftime("%B %d, %Y · %I:%M %p"),
+    ))
+    db.session.add(SupportRequest(
+        ticket_id="TKT-20260624001", username="staff", role="staff",
+        category="Delivery Concern", subject="Late delivery from Metro Meats",
+        message="Expected delivery yesterday but no update received.",
+        status="Open", date=yesterday + " · 09:30 AM",
+    ))
+
     db.session.commit()
 
 # page redirection
@@ -320,7 +388,21 @@ def staff():
 def manager():
     if not session.get("manager_authenticated"):
         return redirect("/")
-    return render_template("manager.html", is_manager=True)
+    if session.get("password_expired"):
+        return redirect("/change-password")
+    mgr = ManagerCredential.query.filter_by(username=session.get("manager_username")).first()
+    days_remaining = manager_password_days_remaining(mgr) if mgr else PASSWORD_EXPIRY_DAYS
+    return render_template("manager.html", is_manager=True, username=session.get("manager_username", "mgr.primary"), days_remaining=days_remaining)
+
+@app.route("/profile")
+def profile_page():
+    role = session.get("role")
+    if role not in {"manager", "staff", "supplier"}:
+        return redirect("/")
+    if session.get("password_expired"):
+        return redirect("/change-password")
+    username = session.get("manager_username") if role == "manager" else session.get("username")
+    return render_template("profile.html", username=username, role=role)
 
 @app.route("/supplier")
 def supplier():
@@ -347,6 +429,9 @@ def login():
             session["manager_authenticated"] = True
             session["manager_username"] = username
             session["role"] = "manager"
+            if manager_password_is_expired(manager_account):
+                session["password_expired"] = True
+                return redirect("/change-password")
             return redirect("/manager")
         return login_error_response()
 
@@ -392,11 +477,14 @@ def change_password():
             error = "New password and confirmation do not match."
         elif not password_meets_requirements(new_password):
             error = PASSWORD_REQUIREMENT_MESSAGE
+        elif password_was_used_recently(role, username, new_password):
+            error = "You cannot reuse any of your last 3 passwords."
         elif role == "manager":
             account = ManagerCredential.query.filter_by(username=username).first()
             if not account or not check_password_hash(account.password_hash, current_password):
                 error = "Current password is incorrect."
             else:
+                record_password_history("manager", username, account.password_hash)
                 account.password_hash = generate_password_hash(new_password)
                 account.password_changed_at = datetime.now()
         else:
@@ -404,6 +492,7 @@ def change_password():
             if not user or not check_password_hash(user.password_hash, current_password):
                 error = "Current password is incorrect."
             else:
+                record_password_history(role, username, user.password_hash)
                 user.password_hash = generate_password_hash(new_password)
                 user.password_changed_at = datetime.now()
 
@@ -423,12 +512,92 @@ def login_error_response():
 
 def password_meets_requirements(password):
     return bool(
-        len(password) >= 12
+        len(password) >= PASSWORD_MIN_LENGTH
         and re.search(r"[A-Z]", password)
         and re.search(r"[a-z]", password)
         and re.search(r"\d", password)
         and re.search(r"[^A-Za-z0-9]", password)
     )
+
+def manager_password_is_expired(account):
+    return not account.password_changed_at or datetime.now() - account.password_changed_at >= timedelta(days=PASSWORD_EXPIRY_DAYS)
+
+def manager_password_days_remaining(account):
+    if not account or not account.password_changed_at:
+        return 0
+    expiry = account.password_changed_at + timedelta(days=PASSWORD_EXPIRY_DAYS)
+    return max(0, (expiry - datetime.now()).days)
+
+def record_password_history(account_type, account_key, password_hash):
+    db.session.add(PasswordHistory(account_type=account_type, account_key=account_key, password_hash=password_hash))
+    histories = PasswordHistory.query.filter_by(account_type=account_type, account_key=account_key).order_by(PasswordHistory.id.desc()).all()
+    for old in histories[PASSWORD_HISTORY_LIMIT:]:
+        db.session.delete(old)
+
+def password_was_used_recently(account_type, account_key, new_password):
+    histories = PasswordHistory.query.filter_by(account_type=account_type, account_key=account_key).order_by(PasswordHistory.id.desc()).limit(PASSWORD_HISTORY_LIMIT).all()
+    for entry in histories:
+        if check_password_hash(entry.password_hash, new_password):
+            return True
+    if account_type == "manager":
+        account = ManagerCredential.query.filter_by(username=account_key).first()
+    else:
+        account = User.query.filter_by(username=account_key, role=account_type).first()
+    if account and check_password_hash(account.password_hash, new_password):
+        return True
+    return False
+
+def supplier_api_allowed():
+    return session.get("role") == "supplier" and not session.get("password_expired")
+
+def get_supplier_company_for_user(username):
+    user = User.query.filter_by(username=username, role="supplier").first()
+    if not user:
+        return None
+    profile = UserProfile.query.filter_by(user_id=user.id).first()
+    if profile and profile.company_name:
+        return profile.company_name
+    return username
+
+def profile_payload(role, username):
+    if role == "manager":
+        profile = ManagerProfile.query.filter_by(username=username).first()
+        if not profile:
+            profile = ManagerProfile(username=username)
+            db.session.add(profile)
+            db.session.commit()
+        return {
+            "username": username,
+            "role": "Manager",
+            "fullName": profile.full_name or "",
+            "email": profile.email or "",
+            "contactNumber": profile.contact_number or "",
+            "avatarData": profile.avatar_data or "",
+        }
+    user = User.query.filter_by(username=username, role=role).first()
+    profile = UserProfile.query.filter_by(user_id=user.id).first() if user else None
+    if user and not profile:
+        profile = UserProfile(user_id=user.id, supplier_id=f"SUP-{user.id:04d}" if role == "supplier" else "")
+        db.session.add(profile)
+        db.session.commit()
+    base = {
+        "username": username,
+        "role": "Inventory Staff" if role == "staff" else "Supplier",
+        "fullName": profile.full_name if profile else "",
+        "email": profile.email if profile else "",
+        "contactNumber": profile.contact_number if profile else "",
+        "avatarData": profile.avatar_data if profile else "",
+        "disabled": user.is_disabled if user else False,
+    }
+    if role == "supplier" and profile:
+        base.update({
+            "supplierId": profile.supplier_id or f"SUP-{user.id:04d}",
+            "companyName": profile.company_name or "",
+            "contactPerson": profile.contact_person or "",
+            "businessAddress": profile.business_address or "",
+            "logoData": profile.logo_data or "",
+        })
+    return base
 
 def password_is_expired(user):
     return not user.password_changed_at or datetime.now() - user.password_changed_at >= timedelta(days=PASSWORD_EXPIRY_DAYS)
@@ -504,6 +673,11 @@ def save_user():
             return jsonify({"error": PASSWORD_REQUIREMENT_MESSAGE}), 400
         user = User(username=username, role=role, password_hash=generate_password_hash(password), password_changed_at=None)
         db.session.add(user)
+        db.session.flush()
+        profile = UserProfile(user_id=user.id, supplier_id=f"SUP-{user.id:04d}" if role == "supplier" else "")
+        if role == "supplier" and data.get("companyName"):
+            profile.company_name = str(data.get("companyName")).strip()
+        db.session.add(profile)
     db.session.commit()
     return jsonify({"status": "success"})
 
@@ -537,37 +711,11 @@ def toggle_user_disabled():
     db.session.commit()
     return jsonify({"status": "success", "disabled": user.is_disabled})
 
-# create account
+# Registration is handled by the Manager only.
 @app.route("/request-access", methods=["GET", "POST"])
 def request_access():
-    if not manager_api_allowed():
-        return redirect("/")
-    if request.method == "POST":
-        ensure_user_schema()
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password")
-        role = request.form.get("role")
-        
-        if not username or role not in {"staff", "supplier"}:
-            return '<script>alert("Please fill in all registration fields."); window.history.back();</script>'
-        if not password_meets_requirements(password):
-            return f'<script>alert("{PASSWORD_REQUIREMENT_MESSAGE}"); window.history.back();</script>'
-            
-        existing_user = User.query.filter_by(username=username).first()
-        if existing_user:
-            return '<script>alert("This username is already registered."); window.history.back();</script>'
-            
-        hashed_pw = generate_password_hash(password, method="pbkdf2:sha256")
-        new_user = User(username=username, password_hash=hashed_pw, role=role, password_changed_at=None)
-        db.session.add(new_user)
-        db.session.commit()
-        
-        return '<script>alert("Account created successfully! Please login."); window.location.href="/";</script>'
-        
-    return render_template("request_access.html")
+    return redirect("/")
 
-
-# Password recovery is handled by the Manager, restaurant owner, or IT personnel.
 @app.route("/forgot-password")
 def forgot_password():
     return redirect("/")
@@ -816,7 +964,8 @@ def approve_po():
     po=PurchaseOrder.query.get(data["id"])
 
     if po:
-        po.status="Transmitted"
+        po.status = "Waiting for Supplier"
+        db.session.add(ActivityLog(event="Purchase Order Sent to Supplier", item=po.item_name, reference=po.id, status="Waiting for Supplier", time=datetime.now().strftime("%H:%M")))
         db.session.commit()
 
     return jsonify({"status":"success"})
@@ -956,7 +1105,7 @@ def staff_deliveries():
             received_by = receipt.received_by
             received_quantity = receipt.received_quantity
         else:
-            status = "Pending" if order.status == "Transmitted" else order.status
+            status = "Pending" if order.status in {"Transmitted", "Waiting for Supplier", "Accepted"} else order.status
             date_received = "—"
             received_by = "—"
             received_quantity = 0
@@ -1088,6 +1237,284 @@ def get_deliveries():
 def save_delivery():
     return jsonify({"error": "Use the Inventory Staff verification workflow before confirming receipt."}), 410
 
+@app.route("/api/profile", methods=["GET", "POST"])
+def api_profile():
+    role = session.get("role")
+    if role not in {"manager", "staff", "supplier"}:
+        return jsonify({"error": "Unauthorized"}), 401
+    username = session.get("manager_username") if role == "manager" else session.get("username")
+    if request.method == "GET":
+        return jsonify(profile_payload(role, username))
+    data = request.get_json(silent=True) or {}
+    if role == "manager":
+        profile = ManagerProfile.query.filter_by(username=username).first() or ManagerProfile(username=username)
+        profile.full_name = str(data.get("fullName", profile.full_name or "")).strip()
+        profile.email = str(data.get("email", profile.email or "")).strip()
+        profile.contact_number = str(data.get("contactNumber", profile.contact_number or "")).strip()
+        if "avatarData" in data:
+            profile.avatar_data = data.get("avatarData") or ""
+        db.session.add(profile)
+    else:
+        user = User.query.filter_by(username=username, role=role).first()
+        profile = UserProfile.query.filter_by(user_id=user.id).first() or UserProfile(user_id=user.id)
+        if role == "staff":
+            profile.full_name = str(data.get("fullName", profile.full_name or "")).strip()
+            profile.email = str(data.get("email", profile.email or "")).strip()
+            profile.contact_number = str(data.get("contactNumber", profile.contact_number or "")).strip()
+            if "avatarData" in data:
+                profile.avatar_data = data.get("avatarData") or ""
+        else:
+            profile.company_name = str(data.get("companyName", profile.company_name or "")).strip()
+            profile.contact_person = str(data.get("contactPerson", profile.contact_person or "")).strip()
+            profile.email = str(data.get("email", profile.email or "")).strip()
+            profile.contact_number = str(data.get("contactNumber", profile.contact_number or "")).strip()
+            profile.business_address = str(data.get("businessAddress", profile.business_address or "")).strip()
+            if "logoData" in data:
+                profile.logo_data = data.get("logoData") or ""
+        db.session.add(profile)
+    db.session.commit()
+    return jsonify({"status": "success", "profile": profile_payload(role, username)})
+
+@app.route("/api/purchase-requests")
+def get_purchase_requests():
+    role = session.get("role")
+    if role == "staff":
+        if not staff_api_allowed():
+            return jsonify({"error": "Unauthorized"}), 403
+        requests_list = PurchaseRequest.query.filter_by(requested_by=session.get("username")).order_by(PurchaseRequest.id.desc()).all()
+    elif manager_api_allowed():
+        requests_list = PurchaseRequest.query.order_by(PurchaseRequest.id.desc()).all()
+    else:
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify([{
+        "id": r.id,
+        "itemName": r.item_name,
+        "qty": r.qty,
+        "unit": r.unit,
+        "reason": r.reason,
+        "requestedBy": r.requested_by,
+        "status": r.status,
+        "date": r.date,
+        "reviewNote": r.review_note,
+    } for r in requests_list])
+
+@app.route("/api/purchase-requests", methods=["POST"])
+def create_purchase_request():
+    if not staff_api_allowed():
+        return jsonify({"error": "Inventory Staff access required"}), 403
+    data = request.get_json(silent=True) or {}
+    item_name = str(data.get("itemName", "")).strip()
+    try:
+        qty = float(data.get("qty", 0))
+    except (TypeError, ValueError):
+        qty = 0
+    if not item_name or qty <= 0:
+        return jsonify({"error": "Item name and quantity are required."}), 400
+    req_id = f"PR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    record = PurchaseRequest(
+        id=req_id,
+        item_name=item_name,
+        qty=qty,
+        unit=data.get("unit", "pcs"),
+        reason=str(data.get("reason", "")).strip(),
+        requested_by=session.get("username", "staff"),
+        status="Pending",
+        date=datetime.now().strftime("%B %d, %Y · %I:%M %p"),
+    )
+    db.session.add(record)
+    db.session.add(ActivityLog(event="Purchase Request submitted", item=item_name, reference=req_id, status="Pending", time=datetime.now().strftime("%H:%M")))
+    db.session.commit()
+    return jsonify({"status": "success", "id": req_id})
+
+@app.route("/api/purchase-requests/review", methods=["POST"])
+def review_purchase_request():
+    if not manager_api_allowed():
+        return jsonify({"error": "Manager access required"}), 403
+    data = request.get_json(silent=True) or {}
+    record = PurchaseRequest.query.get(data.get("id"))
+    action = str(data.get("action", "")).lower()
+    if not record or action not in {"approve", "reject"}:
+        return jsonify({"error": "Invalid request review action."}), 400
+    record.status = "Approved" if action == "approve" else "Rejected"
+    record.review_note = str(data.get("note", "")).strip()
+    db.session.add(ActivityLog(event=f"Purchase Request {record.status}", item=record.item_name, reference=record.id, status=record.status, time=datetime.now().strftime("%H:%M")))
+    db.session.commit()
+    return jsonify({"status": "success"})
+
+@app.route("/api/support", methods=["GET", "POST"])
+def api_support():
+    role = session.get("role")
+    if role not in {"staff", "supplier"} and not manager_api_allowed():
+        return jsonify({"error": "Unauthorized"}), 401
+    if request.method == "GET":
+        if manager_api_allowed():
+            tickets = SupportRequest.query.order_by(SupportRequest.id.desc()).all()
+        else:
+            username = session.get("username")
+            tickets = SupportRequest.query.filter_by(username=username).order_by(SupportRequest.id.desc()).all()
+        return jsonify([{
+            "id": t.id,
+            "ticketId": t.ticket_id,
+            "username": t.username,
+            "role": t.role,
+            "category": t.category,
+            "subject": t.subject,
+            "message": t.message,
+            "status": t.status,
+            "date": t.date,
+        } for t in tickets])
+    if role not in {"staff", "supplier"}:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    category = str(data.get("category", "")).strip()
+    subject = str(data.get("subject", "")).strip()
+    message = str(data.get("message", "")).strip()
+    if category not in {"Account Issue", "Password Concern", "Purchase Order Concern", "Delivery Concern", "Other"} or not subject or not message:
+        return jsonify({"error": "Complete all support request fields."}), 400
+    ticket_id = f"TKT-{datetime.now().strftime('%Y%m%d%H%M')}"
+    ticket = SupportRequest(
+        ticket_id=ticket_id,
+        username=session.get("username"),
+        role=role,
+        category=category,
+        subject=subject,
+        message=message,
+        status="Open",
+        date=datetime.now().strftime("%B %d, %Y · %I:%M %p"),
+    )
+    db.session.add(ticket)
+    db.session.add(ActivityLog(event="Support Request submitted", item=category, reference=ticket_id, status="Open", time=datetime.now().strftime("%H:%M")))
+    db.session.commit()
+    return jsonify({"status": "success", "ticketId": ticket_id})
+
+@app.route("/api/support/update", methods=["POST"])
+def update_support_request():
+    if not manager_api_allowed():
+        return jsonify({"error": "Manager access required"}), 403
+    data = request.get_json(silent=True) or {}
+    ticket = SupportRequest.query.get(data.get("id"))
+    status = str(data.get("status", "")).strip()
+    if not ticket or status not in {"Open", "In Progress", "Resolved", "Closed"}:
+        return jsonify({"error": "Invalid support ticket update."}), 400
+    ticket.status = status
+    db.session.commit()
+    return jsonify({"status": "success"})
+
+@app.route("/api/supplier/purchase-orders")
+def supplier_purchase_orders():
+    if not supplier_api_allowed():
+        return jsonify({"error": "Supplier access required"}), 403
+    company = get_supplier_company_for_user(session.get("username"))
+    orders = PurchaseOrder.query.filter(PurchaseOrder.supplier == company).order_by(PurchaseOrder.id.desc()).all() if company else []
+    return jsonify([{
+        "id": o.id,
+        "itemName": o.item_name,
+        "qty": o.qty,
+        "unit": o.unit,
+        "supplier": o.supplier,
+        "total": o.total,
+        "status": o.status,
+        "type": o.type,
+        "date": o.date,
+        "deliveryId": delivery_id_for_po(o.id),
+    } for o in orders])
+
+@app.route("/api/supplier/purchase-orders/respond", methods=["POST"])
+def supplier_respond_po():
+    if not supplier_api_allowed():
+        return jsonify({"error": "Supplier access required"}), 403
+    data = request.get_json(silent=True) or {}
+    po = PurchaseOrder.query.get(data.get("id"))
+    action = str(data.get("action", "")).lower()
+    company = get_supplier_company_for_user(session.get("username"))
+    if not po or po.supplier != company or action not in {"accept", "reject"}:
+        return jsonify({"error": "Purchase order not found or not assigned to your company."}), 404
+    po.status = "Accepted" if action == "accept" else "Rejected by Supplier"
+    event = "Purchase Order accepted" if action == "accept" else "Purchase Order rejected"
+    db.session.add(ActivityLog(event=event, item=po.item_name, reference=po.id, status=po.status, time=datetime.now().strftime("%H:%M")))
+    db.session.commit()
+    return jsonify({"status": "success", "deliveryId": delivery_id_for_po(po.id)})
+
+@app.route("/api/supplier/deliveries")
+def supplier_deliveries():
+    if not supplier_api_allowed():
+        return jsonify({"error": "Supplier access required"}), 403
+    company = get_supplier_company_for_user(session.get("username"))
+    orders = PurchaseOrder.query.filter(PurchaseOrder.supplier == company).order_by(PurchaseOrder.id.desc()).all() if company else []
+    receipts = {r.po_id: r for r in ReceivingRecord.query.all()}
+    return jsonify([{
+        "deliveryId": receipts[o.id].delivery_id if o.id in receipts else delivery_id_for_po(o.id),
+        "poNumber": o.id,
+        "itemName": o.item_name,
+        "qty": o.qty,
+        "unit": o.unit,
+        "status": receipts[o.id].status if o.id in receipts else o.status,
+        "date": o.date,
+    } for o in orders if o.status in {"Accepted", "In Transit", "Delivered", "Partial", "Waiting for Supplier"}])
+
+@app.route("/api/dashboard/manager")
+def manager_dashboard():
+    if not manager_api_allowed():
+        return jsonify({"error": "Unauthorized"}), 401
+    inventory = Inventory.query.all()
+    low_stock = [i for i in inventory if float(i.stock or 0) <= float(i.threshold or 0)]
+    out_of_stock = [i for i in inventory if float(i.stock or 0) <= 0]
+    pos = PurchaseOrder.query.all()
+    prs = PurchaseRequest.query.all()
+    receipts_by_po = {record.po_id: record for record in ReceivingRecord.query.all()}
+    delivery_statuses = []
+    for order in pos:
+        receipt = receipts_by_po.get(order.id)
+        if receipt:
+            delivery_statuses.append(receipt.status)
+        else:
+            delivery_statuses.append({
+                "Transmitted": "In Transit",
+                "Waiting for Supplier": "In Preparation",
+                "Accepted": "In Transit",
+                "Rejected": "Rejected",
+                "Awaiting approval": "In Preparation",
+            }.get(order.status, order.status or "In Preparation"))
+    suppliers = Supplier.query.count()
+    support_open = SupportRequest.query.filter(SupportRequest.status.in_(["Open", "In Progress"])).count()
+    return jsonify({
+        "totalInventory": len(inventory),
+        "lowStock": len(low_stock),
+        "outOfStock": len(out_of_stock),
+        "pendingPurchaseRequests": len([r for r in prs if r.status == "Pending"]),
+        "pendingPurchaseOrders": len([p for p in pos if p.status == "Awaiting approval"]),
+        "activeSuppliers": suppliers,
+        "pendingDeliveries": len([s for s in delivery_statuses if s in {"In Transit", "In Preparation", "Waiting for Supplier", "Accepted", "Pending"}]),
+        "completedDeliveries": len([s for s in delivery_statuses if s in {"Delivered", "Partial"}]),
+        "openSupportTickets": support_open,
+        "purchaseRequestSummary": {
+            "pending": len([r for r in prs if r.status == "Pending"]),
+            "approved": len([r for r in prs if r.status == "Approved"]),
+            "rejected": len([r for r in prs if r.status == "Rejected"]),
+        },
+        "purchaseOrderSummary": {
+            "waiting": len([p for p in pos if p.status in {"Waiting for Supplier", "Transmitted"}]),
+            "accepted": len([p for p in pos if p.status == "Accepted"]),
+            "rejected": len([p for p in pos if "Rejected" in (p.status or "")]),
+            "completed": len([p for p in pos if p.status in {"Delivered", "Partial"}]),
+        },
+    })
+
+@app.route("/api/dashboard/supplier")
+def supplier_dashboard():
+    if not supplier_api_allowed():
+        return jsonify({"error": "Supplier access required"}), 403
+    company = get_supplier_company_for_user(session.get("username"))
+    orders = PurchaseOrder.query.filter(PurchaseOrder.supplier == company).all() if company else []
+    return jsonify({
+        "newOrders": len([o for o in orders if o.status in {"Waiting for Supplier", "Transmitted"}]),
+        "acceptedOrders": len([o for o in orders if o.status == "Accepted"]),
+        "pendingDeliveries": len([o for o in orders if o.status in {"Accepted", "In Transit"}]),
+        "completedDeliveries": len([o for o in orders if o.status in {"Delivered", "Partial"}]),
+        "rejectedOrders": len([o for o in orders if "Rejected" in (o.status or "")]),
+        "profile": profile_payload("supplier", session.get("username")),
+    })
+
 def initialize_app():
     with app.app_context():
         ensure_user_schema()
@@ -1101,11 +1528,22 @@ def initialize_app():
                 password_changed_at=None
             ))
         if not User.query.filter_by(username="supplier").first():
-            db.session.add(User(
+            supplier_user = User(
                 username="supplier",
                 password_hash=generate_password_hash("Supplier@2026"),
                 role="supplier",
                 password_changed_at=None
+            )
+            db.session.add(supplier_user)
+            db.session.flush()
+            db.session.add(UserProfile(
+                user_id=supplier_user.id,
+                supplier_id="SUP-0001",
+                company_name="Metro Meats Supply",
+                contact_person="Juan Dela Cruz",
+                email="orders@metromeats.ph",
+                contact_number="+63 917 555 0101",
+                business_address="123 Industrial Ave, Quezon City",
             ))
         db.session.commit()
 

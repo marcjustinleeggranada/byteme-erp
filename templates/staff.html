@@ -26,11 +26,13 @@
         </div>
       </div>
 
+      <button class="staff-nav-item" data-title="Purchase Requests" data-screen="purchase-requests"><i class="ti ti-file-plus"></i><span>Purchase Requests</span></button>
+
       <div class="staff-nav-group">
-        <button class="staff-nav-item group-toggle" data-title="Deliveries"><i class="ti ti-truck-delivery"></i><span>Deliveries</span><i class="ti ti-chevron-down group-arrow"></i></button>
+        <button class="staff-nav-item group-toggle" data-title="Delivery Receiving"><i class="ti ti-truck-delivery"></i><span>Delivery Receiving</span><i class="ti ti-chevron-down group-arrow"></i></button>
         <div class="staff-subnav">
+          <button data-screen="receive-deliveries">Scan Delivery QR Code</button>
           <button data-screen="pending-deliveries">Pending Deliveries</button>
-          <button data-screen="receive-deliveries">Receive Deliveries</button>
           <button data-screen="delivery-history">Delivery History</button>
         </div>
       </div>
@@ -45,6 +47,7 @@
     </nav>
     <div class="staff-sidebar-footer">
       <div class="staff-nav-label">Settings</div>
+      <a class="staff-nav-item" data-title="Profile" href="/profile"><i class="ti ti-user"></i><span>Profile</span></a>
       <a class="staff-nav-item" data-title="Change Password" href="/change-password"><i class="ti ti-key"></i><span>Change Password</span></a>
       <a class="staff-nav-item" data-title="Logout" href="/logout"><i class="ti ti-logout"></i><span>Logout</span></a>
     </div>
@@ -68,13 +71,17 @@
         <div class="staff-kpi-grid">
           <div class="staff-kpi"><span>Total Inventory Items</span><strong id="kpi-total-items">0</strong><i class="ti ti-package"></i></div>
           <div class="staff-kpi alert"><span>Low Stock Items</span><strong id="kpi-low-items">0</strong><i class="ti ti-alert-triangle"></i></div>
-          <div class="staff-kpi"><span>Pending Deliveries</span><strong id="kpi-pending-deliveries">0</strong><i class="ti ti-truck-loading"></i></div>
+          <div class="staff-kpi"><span>Pending Purchase Requests</span><strong id="kpi-pending-requests">0</strong><i class="ti ti-file-plus"></i></div>
           <div class="staff-kpi good"><span>Today's Deliveries</span><strong id="kpi-today-deliveries">0</strong><i class="ti ti-circle-check"></i></div>
-          <div class="staff-kpi"><span>Recent Adjustments</span><strong id="kpi-recent-adjustments">0</strong><i class="ti ti-adjustments"></i></div>
+          <div class="staff-kpi"><span>Completed Deliveries</span><strong id="kpi-completed-deliveries">0</strong><i class="ti ti-truck-delivery"></i></div>
         </div>
         <div class="staff-grid staff-grid-two">
-          <div class="staff-card"><div class="staff-card-header"><div><h2>Recent Inventory Adjustments</h2><p>Latest recorded stock changes</p></div><button class="staff-link-button" data-screen="stock-adjustments">View all</button></div><div id="dashboard-adjustments" class="staff-feed"></div></div>
-          <div class="staff-card"><div class="staff-card-header"><div><h2>Recent Activity</h2><p>Receiving and inventory events</p></div></div><div id="staff-activity-feed" class="staff-feed"></div></div>
+          <div class="staff-card"><div class="staff-card-header"><div><h2>Recent Activities</h2><p>Receiving, inventory, and request events</p></div></div><div id="staff-activity-feed" class="staff-feed"></div></div>
+          <div class="staff-card"><div class="staff-card-header"><div><h2>Inventory Alerts</h2><p>Low stock and out-of-stock items</p></div><button class="staff-link-button" data-screen="low-stock">View all</button></div><div id="dashboard-inventory-alerts" class="staff-feed"></div></div>
+        </div>
+        <div class="staff-grid staff-grid-two">
+          <div class="staff-card"><div class="staff-card-header"><div><h2>Pending Deliveries</h2><p>Deliveries awaiting receipt</p></div><button class="staff-link-button" data-screen="pending-deliveries">View all</button></div><div id="dashboard-pending-deliveries" class="staff-feed"></div></div>
+          <div class="staff-card"><div class="staff-card-header"><div><h2>Purchase Request Status</h2><p>Summary of your submitted requests</p></div><button class="staff-link-button" data-screen="purchase-requests">View all</button></div><div id="dashboard-request-summary" class="staff-feed"></div></div>
         </div>
       </section>
 
@@ -98,6 +105,27 @@
             <div class="staff-form-actions"><button type="button" class="staff-btn secondary" id="adjustment-cancel">Cancel</button><button type="submit" class="staff-btn primary"><i class="ti ti-device-floppy"></i> Save Adjustment</button></div>
           </form>
           <div class="staff-card"><div class="staff-card-header"><div><h2>Adjustment History</h2><p>Most recent inventory corrections</p></div></div><div id="adjustment-history" class="staff-feed"></div></div>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-purchase-requests">
+        <div class="staff-grid staff-adjustment-layout">
+          <form class="staff-card staff-form-card" id="purchase-request-form">
+            <div class="staff-card-header"><div><h2>Submit Purchase Request</h2><p>Request restock for inventory items</p></div></div>
+            <label>Item Name<select id="pr-item" required></select></label>
+            <div class="staff-form-row">
+              <label>Quantity<input id="pr-qty" type="number" step="0.01" min="0.01" placeholder="Enter quantity" required></label>
+              <label>Unit<input id="pr-unit" type="text" placeholder="e.g. pcs, kg, L" value="pcs"></label>
+            </div>
+            <label>Reason<textarea id="pr-reason" rows="3" placeholder="Explain why this item is needed" required></textarea></label>
+            <div class="staff-form-actions"><button type="button" class="staff-btn secondary" id="pr-cancel">Clear</button><button type="submit" class="staff-btn primary"><i class="ti ti-send"></i> Submit Request</button></div>
+          </form>
+          <div class="staff-card">
+            <div class="staff-card-header"><div><h2>My Purchase Requests</h2><p>Track status of your submitted requests</p></div></div>
+            <div class="staff-table-card" style="border:0;box-shadow:none">
+              <table><thead><tr><th>Request ID</th><th>Item</th><th>Qty</th><th>Status</th><th>Date</th><th>Review Note</th></tr></thead><tbody id="purchase-requests-tbody"></tbody></table>
+            </div>
+          </div>
         </div>
       </section>
 

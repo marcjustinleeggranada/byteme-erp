@@ -3,201 +3,151 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Procurement System Login</title>
-
+<title>Byte Me Restaurant — Procurement & Inventory Management</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 </head>
+<body class="erp-login-page">
 
-<body class="login-page">
+<div class="erp-login-bg" aria-hidden="true"></div>
+<div class="erp-login-overlay" aria-hidden="true"></div>
 
-<div class="login-page-shell">
-<main class="login-main">
+<div class="erp-login-shell">
+  <main class="erp-login-card">
+    <div class="erp-login-brand">
+      <div class="erp-login-mark">B</div>
+      <div>
+        <strong>Byte Me Restaurant</strong>
+        <span>Procurement & Inventory Management System</span>
+      </div>
+    </div>
 
-<div class="login-container">
+    <h1>Sign In</h1>
+    <p class="erp-login-lead">Select your role and enter your credentials to access the ERP portal.</p>
 
-    <div class="divider top"></div>
+    <form action="/login" method="POST" class="erp-login-form">
+      <section id="role-step" class="erp-login-step">
+        <label class="erp-field-label">Account Type</label>
+        <div class="erp-role-grid" role="radiogroup" aria-label="Account type">
+          <label class="erp-role-card">
+            <input type="radio" name="role" value="manager" required>
+            <i class="ti ti-briefcase"></i>
+            <span>Manager</span>
+          </label>
+          <label class="erp-role-card">
+            <input type="radio" name="role" value="staff" required>
+            <i class="ti ti-package"></i>
+            <span>Inventory Staff</span>
+          </label>
+          <label class="erp-role-card">
+            <input type="radio" name="role" value="supplier" required>
+            <i class="ti ti-building-store"></i>
+            <span>Supplier</span>
+          </label>
+        </div>
+      </section>
 
-    <h1 class="login-title">Procurement System Login</h1>
+      <section id="credentials-step" class="erp-login-step" hidden>
+        <button type="button" id="back-to-roles" class="erp-back-btn"><i class="ti ti-arrow-left"></i> Change account type</button>
+        <p id="selected-role-label" class="erp-selected-role"></p>
 
-    <form action="/login" method="POST">
-        <section id="role-step" class="login-step">
-            <p class="login-subtitle">First, choose your account type</p>
-
-            <div class="role-options" role="radiogroup" aria-label="Account type">
-            <label class="role-card">
-                <input type="radio" name="role" value="manager" required>
-                <span class="role-card-content">
-                    <i class="fa-solid fa-user-tie"></i>
-                    <span>Manager</span>
-                </span>
-            </label>
-
-            <label class="role-card">
-                <input type="radio" name="role" value="staff" required>
-                <span class="role-card-content">
-                    <i class="fa-solid fa-id-badge"></i>
-                    <span>Inventory Staff</span>
-                </span>
-            </label>
-
-            <label class="role-card">
-                <input type="radio" name="role" value="supplier" required>
-                <span class="role-card-content">
-                    <i class="fa-solid fa-truck-field"></i>
-                    <span>Supplier</span>
-                </span>
-            </label>
-            </div>
-
-        </section>
-
-        <section id="credentials-step" class="login-step" hidden>
-            <button type="button" id="back-to-roles" class="step-back">
-                <i class="fa-solid fa-arrow-left"></i> Change account type
-            </button>
-            <p id="selected-role-label" class="selected-role-label"></p>
-
-        <div class="form-group">
-            <div class="input-wrapper">
-                <i class="fa-solid fa-user"></i>
-                <input type="text" name="username" placeholder="Username" autocomplete="username" required>
-            </div>
+        <label class="erp-field-label" for="username">Username</label>
+        <div class="erp-input-wrap">
+          <i class="ti ti-user"></i>
+          <input id="username" type="text" name="username" placeholder="Enter username" autocomplete="username" required>
         </div>
 
-        <div class="form-group">
-            <div class="input-wrapper">
-                <i class="fa-solid fa-lock"></i>
-                <input type="password" name="password" placeholder="Password" required>
-            </div>
+        <label class="erp-field-label" for="password">Password</label>
+        <div class="erp-input-wrap">
+          <i class="ti ti-lock"></i>
+          <input id="password" type="password" name="password" placeholder="Enter password" autocomplete="current-password" required>
         </div>
 
-        <div class="options-wrapper">
-
-            <label class="remember-me">
-                <input type="checkbox" name="remember">
-                <span>Remember me</span>
-            </label>
-
-        </div>
-
-            <button type="submit" class="submit-btn">LOGIN</button>
-        </section>
-
+        <button type="submit" class="erp-signin-btn">Sign In</button>
+      </section>
     </form>
+  </main>
 
-    <div class="divider bottom"></div>
-
-</div>
-</main>
-
-<footer class="login-footer">
-    <nav class="login-footer-links" aria-label="Login page information">
-        <button type="button" data-info-modal="about-us">About Us</button>
-        <span aria-hidden="true">|</span>
-        <button type="button" data-info-modal="contact-support">Contact Support</button>
-        <span aria-hidden="true">|</span>
-        <button type="button" data-info-modal="privacy-policy">Privacy Policy</button>
+  <footer class="erp-login-footer">
+    <nav aria-label="Footer links">
+      <button type="button" data-info-modal="about-us">About Us</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" data-info-modal="contact-support">Contact Support</button>
     </nav>
-    <p class="login-footer-copyright">&copy; 2026 Byte Me Restaurant ERP</p>
-    <p class="login-footer-system">Procurement &amp; Inventory Management System</p>
-</footer>
+    <p>Copyright &copy; Byte Me Restaurant</p>
+  </footer>
 </div>
 
 <div class="login-modal-backdrop" id="login-info-modal" hidden>
-    <section class="login-info-modal" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
-        <div class="login-modal-accent"></div>
-        <div class="login-modal-header">
-            <h2 id="login-modal-title"></h2>
-            <button type="button" class="login-modal-x" id="login-modal-x" aria-label="Close dialog"><i class="fa-solid fa-xmark"></i></button>
-        </div>
-        <div class="login-modal-body" id="login-modal-body"></div>
-        <div class="login-modal-actions"><button type="button" class="login-modal-close" id="login-modal-close">Close</button></div>
-    </section>
+  <section class="login-info-modal" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+    <div class="login-modal-header">
+      <h2 id="login-modal-title"></h2>
+      <button type="button" class="login-modal-x" id="login-modal-x" aria-label="Close"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="login-modal-body" id="login-modal-body"></div>
+    <div class="login-modal-actions"><button type="button" class="login-modal-close" id="login-modal-close">Close</button></div>
+  </section>
 </div>
 
 <template id="about-us-content">
-    <p>Byte Me Restaurant ERP is a cloud-based Procurement and Inventory Management System designed to streamline inventory tracking, supplier coordination, procurement processes, and delivery management.</p>
-    <p>The system provides dedicated portals for Managers, Inventory Staff, and Suppliers to improve operational efficiency and inventory control.</p>
-    <div class="login-modal-meta"><strong>Version 1.0</strong><span>Developed for Academic Purposes.</span></div>
+  <p>Byte Me Restaurant ERP is a cloud-based Procurement and Inventory Management System for inventory tracking, supplier coordination, procurement, and delivery management.</p>
+  <p>Dedicated portals are provided for Managers, Inventory Staff, and Suppliers.</p>
 </template>
-
 <template id="contact-support-content">
-    <p class="login-modal-lead">Need Assistance?</p>
-    <dl class="login-contact-list">
-        <div><dt>Email</dt><dd><a href="mailto:support@byteme.local">support@byteme.local</a></dd></div>
-        <div><dt>Phone</dt><dd>+63 912 345 6789</dd></div>
-        <div><dt>Business Hours</dt><dd>Monday - Saturday<br>8:00 AM - 5:00 PM</dd></div>
-    </dl>
-    <p>For account-related concerns, please contact Byte Me Restaurant Management.</p>
-</template>
-
-<template id="privacy-policy-content">
-    <p>This system stores user account information, inventory records, supplier information, procurement transactions, and delivery records for operational purposes.</p>
-    <p>Access to system data is restricted to authorized users based on their assigned roles.</p>
-    <p>All information within the system is used solely for inventory and procurement management.</p>
-    <p>This system is developed for educational purposes.</p>
+  <p><strong>Email:</strong> support@byteme.local</p>
+  <p><strong>Phone:</strong> +63 912 345 6789</p>
+  <p><strong>Hours:</strong> Monday – Saturday, 8:00 AM – 5:00 PM</p>
+  <p>For account access, contact Byte Me Restaurant Management.</p>
 </template>
 
 <script>
-    const roleStep = document.getElementById("role-step");
-    const credentialsStep = document.getElementById("credentials-step");
-    const backButton = document.getElementById("back-to-roles");
-    const selectedRoleLabel = document.getElementById("selected-role-label");
-    const roleInputs = document.querySelectorAll('input[name="role"]');
-
-    roleInputs.forEach((input) => {
-        input.addEventListener("change", () => {
-            const roleName = input.value === "staff" ? "Inventory Staff" : input.value.charAt(0).toUpperCase() + input.value.slice(1);
-            selectedRoleLabel.textContent = `${roleName} Login`;
-            roleStep.hidden = true;
-            credentialsStep.hidden = false;
-            credentialsStep.querySelector('input[name="username"]').focus();
-        });
+  const roleStep = document.getElementById("role-step");
+  const credentialsStep = document.getElementById("credentials-step");
+  const backButton = document.getElementById("back-to-roles");
+  const selectedRoleLabel = document.getElementById("selected-role-label");
+  document.querySelectorAll('input[name="role"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      const roleName = input.value === "staff" ? "Inventory Staff" : input.value.charAt(0).toUpperCase() + input.value.slice(1);
+      selectedRoleLabel.textContent = roleName + " Sign In";
+      roleStep.hidden = true;
+      credentialsStep.hidden = false;
+      document.getElementById("username").focus();
     });
+  });
+  backButton.addEventListener("click", () => {
+    credentialsStep.hidden = true;
+    roleStep.hidden = false;
+  });
 
-    backButton.addEventListener("click", () => {
-        credentialsStep.hidden = true;
-        roleStep.hidden = false;
-    });
-
-    const modalContent = {
-        "about-us": { title: "About Byte Me Restaurant ERP", template: "about-us-content" },
-        "contact-support": { title: "Contact Support", template: "contact-support-content" },
-        "privacy-policy": { title: "Privacy Policy", template: "privacy-policy-content" }
-    };
-    const infoModal = document.getElementById("login-info-modal");
-    const modalTitle = document.getElementById("login-modal-title");
-    const modalBody = document.getElementById("login-modal-body");
-    const modalCloseButton = document.getElementById("login-modal-close");
-    const modalXButton = document.getElementById("login-modal-x");
-    let modalTrigger = null;
-
-    function openInfoModal(key, trigger) {
-        const content = modalContent[key];
-        if (!content) return;
-        modalTrigger = trigger;
-        modalTitle.textContent = content.title;
-        modalBody.replaceChildren(document.getElementById(content.template).content.cloneNode(true));
-        infoModal.hidden = false;
-        document.body.classList.add("modal-open");
-        modalCloseButton.focus();
-    }
-
-    function closeInfoModal() {
-        infoModal.hidden = true;
-        document.body.classList.remove("modal-open");
-        if (modalTrigger) modalTrigger.focus();
-    }
-
-    document.querySelectorAll("[data-info-modal]").forEach((button) => {
-        button.addEventListener("click", () => openInfoModal(button.dataset.infoModal, button));
-    });
-    modalCloseButton.addEventListener("click", closeInfoModal);
-    modalXButton.addEventListener("click", closeInfoModal);
-    infoModal.addEventListener("click", (event) => { if (event.target === infoModal) closeInfoModal(); });
-    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !infoModal.hidden) closeInfoModal(); });
+  const modalContent = {
+    "about-us": { title: "About Us", template: "about-us-content" },
+    "contact-support": { title: "Contact Support", template: "contact-support-content" },
+  };
+  const infoModal = document.getElementById("login-info-modal");
+  const modalTitle = document.getElementById("login-modal-title");
+  const modalBody = document.getElementById("login-modal-body");
+  const modalCloseButton = document.getElementById("login-modal-close");
+  const modalXButton = document.getElementById("login-modal-x");
+  let modalTrigger = null;
+  function openInfoModal(key, trigger) {
+    const content = modalContent[key];
+    if (!content) return;
+    modalTrigger = trigger;
+    modalTitle.textContent = content.title;
+    modalBody.replaceChildren(document.getElementById(content.template).content.cloneNode(true));
+    infoModal.hidden = false;
+    modalCloseButton.focus();
+  }
+  function closeInfoModal() {
+    infoModal.hidden = true;
+    if (modalTrigger) modalTrigger.focus();
+  }
+  document.querySelectorAll("[data-info-modal]").forEach((button) => {
+    button.addEventListener("click", () => openInfoModal(button.dataset.infoModal, button));
+  });
+  modalCloseButton.addEventListener("click", closeInfoModal);
+  modalXButton.addEventListener("click", closeInfoModal);
+  infoModal.addEventListener("click", (e) => { if (e.target === infoModal) closeInfoModal(); });
 </script>
-
 </body>
 </html>

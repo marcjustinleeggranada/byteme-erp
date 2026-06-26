@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Profile — Byte Me ERP</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='staff-portal.css') }}">
+  <script defer src="{{ url_for('static', filename='js/profile.js') }}"></script>
+</head>
+<body data-role="{{ role }}">
+<div class="staff-app profile-page">
+  <main class="staff-main" style="margin:0 auto;max-width:900px;width:100%">
+    <header class="staff-topbar">
+      <div class="staff-title-wrap">
+        <a class="staff-btn secondary" href="/{{ 'manager' if role == 'manager' else role }}"><i class="ti ti-arrow-left"></i> Back</a>
+        <div><h1>{% if role == 'supplier' %}Company Profile{% else %}Profile{% endif %}</h1><p>{{ username }} · {{ 'Manager' if role == 'manager' else ('Inventory Staff' if role == 'staff' else 'Supplier') }}</p></div>
+      </div>
+    </header>
+    <div class="staff-content">
+      <form class="staff-card staff-form-card" id="profile-form">
+        <div class="profile-avatar-row" id="avatar-section">
+          <div class="profile-avatar-wrap">
+            <img id="profile-avatar-preview" alt="Profile" hidden>
+            <div class="staff-avatar large-avatar" id="profile-avatar-fallback">BM</div>
+          </div>
+          <div class="profile-avatar-actions">
+            <label class="staff-btn secondary"><i class="ti ti-upload"></i> Upload<input type="file" id="avatar-upload" accept="image/*" hidden></label>
+            <button type="button" class="staff-btn secondary" id="avatar-remove"><i class="ti ti-trash"></i> Remove</button>
+          </div>
+        </div>
+        <div id="manager-staff-fields">
+          <label>Full Name<input id="profile-full-name" type="text" placeholder="Enter full name"></label>
+          <label>Email<input id="profile-email" type="email" placeholder="email@byteme.local"></label>
+          <label>Contact Number<input id="profile-contact" type="text" placeholder="+63 9XX XXX XXXX"></label>
+        </div>
+        <div id="supplier-fields" hidden>
+          <label>Company Name<input id="profile-company" type="text" placeholder="Company name"></label>
+          <label>Contact Person<input id="profile-contact-person" type="text" placeholder="Contact person"></label>
+          <label>Email<input id="profile-supplier-email" type="email"></label>
+          <label>Contact Number<input id="profile-supplier-phone" type="text"></label>
+          <label>Business Address<textarea id="profile-address" rows="3"></textarea></label>
+          <p class="profile-readonly"><strong>Username:</strong> <span id="profile-username-readonly">{{ username }}</span></p>
+          <p class="profile-readonly"><strong>Supplier ID:</strong> <span id="profile-supplier-id">—</span></p>
+          <p class="profile-readonly"><strong>Role:</strong> Supplier</p>
+        </div>
+        <div id="readonly-fields">
+          <p class="profile-readonly"><strong>Username:</strong> {{ username }}</p>
+          <p class="profile-readonly"><strong>Role:</strong> {{ 'Manager' if role == 'manager' else ('Inventory Staff' if role == 'staff' else 'Supplier') }}</p>
+          {% if role == 'staff' %}<p class="profile-readonly"><strong>Account Status:</strong> <span id="profile-account-status">Active</span></p>{% endif %}
+        </div>
+        <div class="staff-form-actions">
+          <button type="submit" class="staff-btn primary"><i class="ti ti-device-floppy"></i> Save Profile</button>
+        </div>
+      </form>
+    </div>
+  </main>
+</div>
+<div class="staff-toast" id="staff-toast"><i class="ti ti-circle-check"></i><span></span></div>
+</body>
+</html>
