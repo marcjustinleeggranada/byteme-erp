@@ -6,6 +6,7 @@
   <title>Byte Me — Manager Portal</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='staff-portal.css') }}">
+  <script defer src="{{ url_for('static', filename='js/portal-profile.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/manager-portal.js') }}"></script>
   <style>
     .staff-kpi-grid.eight { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
@@ -89,8 +90,8 @@
         </div>
       </div>
       <div class="staff-user">
-        <div class="staff-user-copy"><strong>{{ username }}</strong><span>Manager</span></div>
-        <div class="staff-avatar" id="manager-avatar">MG</div>
+        <div class="staff-user-copy"><strong id="portal-user-name">{{ username }}</strong><span>Manager</span></div>
+        <div class="staff-avatar" id="portal-user-avatar">MG</div>
       </div>
     </header>
 

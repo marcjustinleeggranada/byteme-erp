@@ -29,6 +29,7 @@
     .po-actions { display:flex; gap:6px; flex-wrap:wrap; }
     @media(max-width:760px){ .company-info-grid,.summary-stat-row{ grid-template-columns:1fr; } }
   </style>
+  <script defer src="{{ url_for('static', filename='js/portal-profile.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/supplier-portal.js') }}"></script>
 </head>
 <body data-username="{{ username }}">
@@ -80,8 +81,8 @@
         <div><h1 id="supplier-page-title">Dashboard Overview</h1><p id="supplier-page-subtitle">Purchase orders, deliveries, and company activity</p></div>
       </div>
       <div class="staff-user">
-        <div class="staff-user-copy"><strong>{{ username }}</strong><span>Supplier</span></div>
-        <div class="staff-avatar" id="supplier-avatar">S</div>
+        <div class="staff-user-copy"><strong id="portal-user-name">{{ username }}</strong><span>Supplier</span></div>
+        <div class="staff-avatar" id="portal-user-avatar">S</div>
       </div>
     </header>
 

@@ -40,6 +40,8 @@ button,input,select,textarea { font:inherit; }
 .staff-user-copy strong { font-size:11px; }.staff-user-copy span { color:var(--muted); font-size:9px; }
 .staff-avatar,.large-avatar { display:grid; place-items:center; border-radius:50%; background:var(--sage-100); color:var(--sage-900); font-weight:700; }
 .staff-avatar { width:36px; height:36px; font-size:11px; }
+.staff-avatar.has-image { padding:0; overflow:hidden; }
+.staff-avatar img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
 .staff-content { flex:1; width:100%; max-width:1500px; margin:0 auto; padding:28px; overflow-y:auto; }
 .staff-screen { display:none; animation:staffFade .18s ease; }.staff-screen.active { display:block; }
 @keyframes staffFade { from{opacity:0;transform:translateY(3px)} to{opacity:1;transform:none} }

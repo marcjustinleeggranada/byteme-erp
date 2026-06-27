@@ -23,6 +23,8 @@
   var inventoryPage = 1;
   var currentDelivery = null;
   var qrScanner = null;
+  var qrScannerStopping = null;
+  var adjustmentBaselineStock = null;
   var toastTimer = null;
 
   var $ = function (id) { return document.getElementById(id); };
@@ -703,42 +705,75 @@
     var form = $("adjustment-form");
     var itemSelect = $("adjustment-item");
     var cancelBtn = $("adjustment-cancel");
+    var typeSelect = $("adjustment-type");
+    var quantityInput = $("adjustment-quantity");
+    var stockInput = $("adjustment-current-stock");
+
+    function setBaselineStock(item) {
+      adjustmentBaselineStock = item ? Number(item.stock || 0) : null;
+      if (stockInput) {
+        stockInput.value = adjustmentBaselineStock != null ? adjustmentBaselineStock : "";
+      }
+    }
+
+    function previewStockFromQuantity() {
+      if (!stockInput || adjustmentBaselineStock == null || !typeSelect || !quantityInput) return;
+      var qty = parseFloat(quantityInput.value);
+      if (!qty || qty <= 0) {
+        stockInput.value = adjustmentBaselineStock;
+        return;
+      }
+      var type = typeSelect.value;
+      if (type === "Damaged" || type === "Expired") {
+        stockInput.value = Math.max(0, adjustmentBaselineStock - qty);
+      } else if (type === "Correction") {
+        stockInput.value = Math.max(0, adjustmentBaselineStock + qty);
+      }
+    }
 
     if (itemSelect) {
       itemSelect.addEventListener("change", function () {
         var item = inventory.find(function (i) { return String(i.id) === String(itemSelect.value); });
-        var stockInput = $("adjustment-current-stock");
-        if (stockInput) {
-          stockInput.value = item ? formatQty(item.stock, item.unit) : "";
-        }
+        setBaselineStock(item);
       });
     }
+
+    if (typeSelect) typeSelect.addEventListener("change", previewStockFromQuantity);
+    if (quantityInput) quantityInput.addEventListener("input", previewStockFromQuantity);
 
     if (cancelBtn) {
       cancelBtn.addEventListener("click", function () {
         if (form) form.reset();
-        if ($("adjustment-current-stock")) $("adjustment-current-stock").value = "";
+        adjustmentBaselineStock = null;
+        if (stockInput) stockInput.value = "";
       });
     }
 
     if (form) {
       form.addEventListener("submit", function (e) {
         e.preventDefault();
+        var newStock = parseFloat(stockInput && stockInput.value);
         var payload = {
           itemId: Number($("adjustment-item") && $("adjustment-item").value),
-          type: $("adjustment-type") && $("adjustment-type").value,
-          quantity: parseFloat($("adjustment-quantity") && $("adjustment-quantity").value),
-          reason: ($("adjustment-reason") && $("adjustment-reason").value || "").trim()
+          type: typeSelect && typeSelect.value,
+          quantity: parseFloat(quantityInput && quantityInput.value),
+          reason: ($("adjustment-reason") && $("adjustment-reason").value || "").trim(),
+          newStock: Number.isFinite(newStock) ? newStock : null
         };
         if (!payload.itemId || !payload.type || !payload.reason || !payload.quantity) {
           showToast("Complete all adjustment fields.", "error");
+          return;
+        }
+        if (payload.newStock == null || payload.newStock < 0) {
+          showToast("Enter a valid current stock level.", "error");
           return;
         }
         apiFetch("/api/staff/adjustments", { method: "POST", body: JSON.stringify(payload) })
           .then(function () {
             showToast("Stock adjustment saved.");
             form.reset();
-            if ($("adjustment-current-stock")) $("adjustment-current-stock").value = "";
+            adjustmentBaselineStock = null;
+            if (stockInput) stockInput.value = "";
             return refreshData();
           })
           .catch(function (err) {
@@ -806,7 +841,6 @@
     apiFetch("/api/staff/deliveries/" + encodeURIComponent(id.trim()))
       .then(function (detail) {
         showDeliveryDetail(detail);
-        stopQrScanner();
       })
       .catch(function (err) {
         resetDeliveryView();
@@ -867,17 +901,31 @@
 
   function stopQrScanner() {
     var readerEl = $("staff-qr-reader");
+    if (qrScannerStopping) return qrScannerStopping;
+
     if (!qrScanner) {
-      if (readerEl) readerEl.hidden = true;
-      return;
-    }
-    qrScanner.stop().catch(function () { return null; }).then(function () {
-      if (qrScanner) {
-        qrScanner.clear().catch(function () { return null; });
-        qrScanner = null;
+      if (readerEl) {
+        readerEl.innerHTML = "";
+        readerEl.hidden = true;
       }
-      if (readerEl) readerEl.hidden = true;
-    });
+      return Promise.resolve();
+    }
+
+    var scanner = qrScanner;
+    qrScanner = null;
+    qrScannerStopping = scanner.stop()
+      .catch(function () { return null; })
+      .then(function () { return scanner.clear().catch(function () { return null; }); })
+      .then(function () {
+        if (readerEl) {
+          readerEl.innerHTML = "";
+          readerEl.hidden = true;
+        }
+      })
+      .finally(function () {
+        qrScannerStopping = null;
+      });
+    return qrScannerStopping;
   }
 
   function startQrScanner() {
@@ -888,20 +936,21 @@
     var readerEl = $("staff-qr-reader");
     if (!readerEl) return;
 
-    readerEl.hidden = false;
-    if (qrScanner) return;
-
-    qrScanner = new Html5Qrcode("staff-qr-reader");
-    qrScanner.start(
-      { facingMode: "environment" },
-      { fps: 10, qrbox: { width: 220, height: 220 } },
-      function (decodedText) {
-        stopQrScanner();
-        if ($("delivery-id-input")) $("delivery-id-input").value = decodedText.trim();
-        loadDeliveryDetail(decodedText.trim());
-      },
-      function () { /* ignore scan errors */ }
-    ).catch(function () {
+    stopQrScanner().then(function () {
+      readerEl.hidden = false;
+      readerEl.innerHTML = "";
+      qrScanner = new Html5Qrcode("staff-qr-reader");
+      return qrScanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 220, height: 220 } },
+        function (decodedText) {
+          stopQrScanner();
+          if ($("delivery-id-input")) $("delivery-id-input").value = decodedText.trim();
+          loadDeliveryDetail(decodedText.trim());
+        },
+        function () { /* ignore scan errors */ }
+      );
+    }).catch(function () {
       showToast("Could not access camera. Use manual search instead.", "error");
       stopQrScanner();
     });
@@ -911,8 +960,11 @@
     var openBtn = $("open-camera");
     if (openBtn) {
       openBtn.addEventListener("click", function () {
-        if (qrScanner) stopQrScanner();
-        else startQrScanner();
+        if (qrScanner || qrScannerStopping) {
+          stopQrScanner();
+        } else {
+          startQrScanner();
+        }
       });
     }
   }
@@ -951,6 +1003,7 @@
   }
 
   function init() {
+    if (window.PortalProfile) window.PortalProfile.loadHeaderProfile();
     setupNavigation();
     setupNavGroups();
     setupMobileNav();

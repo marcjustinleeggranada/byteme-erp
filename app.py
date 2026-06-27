@@ -74,6 +74,7 @@ class PurchaseOrder(db.Model):
     status = db.Column(db.String(50))
     type = db.Column(db.String(50))
     date = db.Column(db.String(50))
+    source_pr_id = db.Column(db.String(50), nullable=True)
 
 class ActivityLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -175,6 +176,40 @@ def get_supplier_price(supplier_name, item_name):
         except:
             pass
     return 150.0
+
+def create_po_from_purchase_request(pr_record):
+    """Create and send a purchase order when a purchase request is approved."""
+    existing = PurchaseOrder.query.filter_by(source_pr_id=pr_record.id).first()
+    if existing:
+        return existing
+
+    item = Inventory.query.filter(db.func.lower(Inventory.name) == pr_record.item_name.lower()).first()
+    supplier = item.supplier_name if item and item.supplier_name else "Default Supplier"
+    unit = pr_record.unit or (item.unit if item else "pcs")
+    price = get_supplier_price(supplier, pr_record.item_name)
+    po_id = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+    po = PurchaseOrder(
+        id=po_id,
+        item_name=pr_record.item_name,
+        qty=pr_record.qty,
+        unit=unit,
+        supplier=supplier,
+        total=pr_record.qty * price,
+        status="Waiting for Supplier",
+        type="From Purchase Request",
+        date=datetime.now().strftime("%B %d, %Y"),
+        source_pr_id=pr_record.id,
+    )
+    db.session.add(po)
+    db.session.add(ActivityLog(
+        event="Purchase Order Sent to Supplier",
+        item=pr_record.item_name,
+        reference=po_id,
+        status="Waiting for Supplier",
+        time=datetime.now().strftime("%H:%M"),
+    ))
+    return po
 
 def sync_low_stock_alerts():
     """
@@ -617,6 +652,9 @@ def ensure_user_schema():
             db.session.execute(text("ALTER TABLE user ADD COLUMN is_disabled BOOLEAN NOT NULL DEFAULT 0"))
         if "password_changed_at" not in columns:
             db.session.execute(text("ALTER TABLE user ADD COLUMN password_changed_at DATETIME"))
+        po_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(purchase_order)"))}
+        if "source_pr_id" not in po_columns:
+            db.session.execute(text("ALTER TABLE purchase_order ADD COLUMN source_pr_id VARCHAR(50)"))
     else:
         columns = {
             row[0]
@@ -628,6 +666,14 @@ def ensure_user_schema():
             db.session.execute(text('ALTER TABLE "user" ADD COLUMN is_disabled BOOLEAN NOT NULL DEFAULT FALSE'))
         if "password_changed_at" not in columns:
             db.session.execute(text('ALTER TABLE "user" ADD COLUMN password_changed_at TIMESTAMP'))
+        po_columns = {
+            row[0]
+            for row in db.session.execute(text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'purchase_order'"
+            ))
+        }
+        if "source_pr_id" not in po_columns:
+            db.session.execute(text("ALTER TABLE purchase_order ADD COLUMN source_pr_id VARCHAR(50)"))
     db.session.commit()
     for username, initial_password in FIXED_MANAGER_ACCOUNTS.items():
         if not ManagerCredential.query.filter_by(username=username).first():
@@ -1064,7 +1110,14 @@ def create_staff_adjustment():
         return jsonify({"error": "Complete all adjustment fields with a valid quantity."}), 400
 
     previous_stock = float(item.stock or 0)
-    if adjustment_type in {"Damaged", "Expired"}:
+    new_stock_raw = data.get("newStock")
+    if new_stock_raw is not None and new_stock_raw != "":
+        try:
+            new_stock = max(0, float(new_stock_raw))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Enter a valid current stock level."}), 400
+        recorded_quantity = new_stock - previous_stock
+    elif adjustment_type in {"Damaged", "Expired"}:
         new_stock = max(0, previous_stock - abs(quantity))
         recorded_quantity = -abs(quantity)
     else:
@@ -1337,9 +1390,13 @@ def review_purchase_request():
         return jsonify({"error": "Invalid request review action."}), 400
     record.status = "Approved" if action == "approve" else "Rejected"
     record.review_note = str(data.get("note", "")).strip()
+    po_id = None
+    if action == "approve":
+        po = create_po_from_purchase_request(record)
+        po_id = po.id
     db.session.add(ActivityLog(event=f"Purchase Request {record.status}", item=record.item_name, reference=record.id, status=record.status, time=datetime.now().strftime("%H:%M")))
     db.session.commit()
-    return jsonify({"status": "success"})
+    return jsonify({"status": "success", "poId": po_id})
 
 @app.route("/api/support", methods=["GET", "POST"])
 def api_support():

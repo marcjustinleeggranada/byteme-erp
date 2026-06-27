@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='staff-portal.css') }}">
   <script src="https://unpkg.com/html5-qrcode"></script>
+  <script defer src="{{ url_for('static', filename='js/portal-profile.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/staff-portal.js') }}"></script>
 </head>
 <body data-username="{{ username }}">
@@ -63,7 +64,7 @@
     {% endif %}
     <header class="staff-topbar">
       <div class="staff-title-wrap"><button class="staff-menu-button" id="staff-menu-button" aria-label="Toggle sidebar"><i class="ti ti-menu-2"></i></button><div><h1 id="staff-page-title">Dashboard Overview</h1><p id="staff-page-subtitle">Inventory operations and receiving activity</p></div></div>
-      <div class="staff-user"><div class="staff-user-copy"><strong>{{ username }}</strong><span>Inventory Staff</span></div><div class="staff-avatar">IS</div></div>
+      <div class="staff-user"><div class="staff-user-copy"><strong id="portal-user-name">{{ username }}</strong><span>Inventory Staff</span></div><div class="staff-avatar" id="portal-user-avatar">IS</div></div>
     </header>
 
     <div class="staff-content">
@@ -99,7 +100,7 @@
         <div class="staff-grid staff-adjustment-layout">
           <form class="staff-card staff-form-card" id="adjustment-form"><div class="staff-card-header"><div><h2>Record Stock Adjustment</h2><p>Damaged, expired, or corrected inventory</p></div></div>
             <label>Item Name<select id="adjustment-item" required></select></label>
-            <label>Current Stock<input id="adjustment-current-stock" type="text" readonly></label>
+            <label>Current Stock<input id="adjustment-current-stock" type="number" step="0.01" min="0" placeholder="Enter new stock level"></label>
             <div class="staff-form-row"><label>Adjustment Type<select id="adjustment-type" required><option value="">Select type</option><option>Damaged</option><option>Expired</option><option>Correction</option></select></label><label>Quantity<input id="adjustment-quantity" type="number" step="0.01" placeholder="Enter quantity" required></label></div>
             <label>Reason<textarea id="adjustment-reason" rows="3" placeholder="Explain why this adjustment is needed" required></textarea></label>
             <div class="staff-form-actions"><button type="button" class="staff-btn secondary" id="adjustment-cancel">Cancel</button><button type="submit" class="staff-btn primary"><i class="ti ti-device-floppy"></i> Save Adjustment</button></div>

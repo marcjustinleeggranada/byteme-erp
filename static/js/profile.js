@@ -62,6 +62,7 @@
       var initials = (data.fullName || data.username || "BM").split(" ").map(function (p) { return p[0]; }).join("").slice(0, 2).toUpperCase();
       setAvatar(avatarData, initials);
     }
+    if (window.PortalProfile) window.PortalProfile.applyProfile(data);
     bindUpload();
   }
 
@@ -109,6 +110,10 @@
     });
     var data = await res.json();
     if (!res.ok) return toast(data.error || "Save failed.");
+    if (window.PortalProfile && data.profile) {
+      window.PortalProfile.applyProfile(data.profile);
+    }
+    sessionStorage.setItem("profileUpdated", "1");
     toast("Profile updated successfully.");
   });
 

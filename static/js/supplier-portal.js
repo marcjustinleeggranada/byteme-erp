@@ -980,7 +980,7 @@
   }
 
   function init() {
-    setupAvatar();
+    if (window.PortalProfile) window.PortalProfile.loadHeaderProfile();
     setupNavigation();
     setupNavGroups();
     setupMobileNav();

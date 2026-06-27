@@ -677,8 +677,12 @@
     apiFetch("/api/purchase-requests/review", {
       method: "POST",
       body: JSON.stringify({ id: id, action: action, note: note })
-    }).then(function () {
-      showToast("Purchase request " + (action === "approve" ? "approved" : "rejected") + ".");
+    }).then(function (result) {
+      if (action === "approve" && result && result.poId) {
+        showToast("Purchase request approved. PO " + result.poId + " sent to supplier.");
+      } else {
+        showToast("Purchase request " + (action === "approve" ? "approved" : "rejected") + ".");
+      }
       return refreshData();
     }).catch(function (err) {
       showToast(err.message, "error");
@@ -919,7 +923,7 @@
   }
 
   function init() {
-    setupAvatar();
+    if (window.PortalProfile) window.PortalProfile.loadHeaderProfile();
     setupNavigation();
     setupNavGroups();
     setupMobileNav();
