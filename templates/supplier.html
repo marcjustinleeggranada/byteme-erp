@@ -57,6 +57,7 @@
         </div>
       </div>
 
+      <button class="staff-nav-item" data-title="Ingredient Pricing" data-screen="catalog"><i class="ti ti-tags"></i><span>Ingredient Pricing</span></button>
       <button class="staff-nav-item" data-title="Support Request" data-screen="support"><i class="ti ti-headset"></i><span>Support Request</span></button>
     </nav>
     <div class="staff-sidebar-footer">
@@ -203,6 +204,19 @@
           <table>
             <thead><tr><th>Delivery ID</th><th>PO #</th><th>Item</th><th>Quantity</th><th>Status</th><th>Date</th><th>Source</th></tr></thead>
             <tbody id="delivery-history-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="staff-screen" id="supplier-screen-catalog">
+        <div class="staff-card-header" style="margin-bottom:15px">
+          <div><h2>Ingredient Pricing</h2><p>Update agreed prices — managers are notified of changes</p></div>
+          <button type="button" class="staff-btn primary compact" id="catalog-save-btn"><i class="ti ti-device-floppy"></i> Save Price Changes</button>
+        </div>
+        <div class="staff-table-card">
+          <table>
+            <thead><tr><th>Ingredient</th><th>Current Price (₱)</th><th>New Price (₱)</th></tr></thead>
+            <tbody id="catalog-pricing-tbody"></tbody>
           </table>
         </div>
       </section>

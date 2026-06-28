@@ -191,7 +191,8 @@
       <!-- Inventory Management -->
       <section class="staff-screen" id="staff-screen-inventory-list">
         <div class="staff-toolbar">
-          <div class="staff-search"><i class="ti ti-search"></i><input id="inventory-search" type="search" placeholder="Search item ID or name"></div>
+          <div class="staff-search"><i class="ti ti-search"></i><input id="inventory-search" type="search" placeholder="Search item, name, or supplier"></div>
+          <select id="inventory-supplier-filter"><option value="">All suppliers</option></select>
           <select id="inventory-status-filter">
             <option value="all">All statuses</option>
             <option value="in-stock">In Stock</option>
@@ -199,17 +200,18 @@
             <option value="critical">Critical</option>
             <option value="out-of-stock">Out of Stock</option>
           </select>
+          <button type="button" class="staff-btn primary compact" id="btn-add-ingredient"><i class="ti ti-plus"></i> Add Ingredient</button>
         </div>
         <div class="staff-table-card">
           <table>
-            <thead><tr><th>Item ID</th><th>Item Name</th><th>Supplier</th><th>Current Stock</th><th>Reorder Level</th><th>Unit</th><th>Status</th></tr></thead>
+            <thead><tr><th>Item ID</th><th>Item Name</th><th>Supplier</th><th>Current Stock</th><th>Reorder Level</th><th>Unit Price</th><th>Unit</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="manager-inventory-tbody"></tbody>
           </table>
           <div class="staff-pagination">
             <span id="inventory-page-info">Page 1</span>
             <div>
-              <button id="inventory-prev"><i class="ti ti-chevron-left"></i></button>
-              <button id="inventory-next"><i class="ti ti-chevron-right"></i></button>
+              <button type="button" id="inventory-prev"><i class="ti ti-chevron-left"></i></button>
+              <button type="button" id="inventory-next"><i class="ti ti-chevron-right"></i></button>
             </div>
           </div>
         </div>
@@ -217,6 +219,9 @@
 
       <!-- Purchase Requests -->
       <section class="staff-screen" id="staff-screen-purchase-requests">
+        <div class="staff-card-header" style="margin-bottom:15px">
+          <div><h2>All Purchase Requests</h2><p>Pending, approved, and rejected staff requests — pending items appear first</p></div>
+        </div>
         <div class="staff-table-card">
           <table>
             <thead><tr><th>Request ID</th><th>Item</th><th>Qty</th><th>Requested By</th><th>Reason</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead>
@@ -271,7 +276,7 @@
           </div>
           <div class="staff-table-actions">
             <button type="button" class="staff-btn primary compact" id="btn-create-staff"><i class="ti ti-user-plus"></i> Create Staff</button>
-            <button type="button" class="staff-btn secondary compact" id="btn-create-supplier"><i class="ti ti-building-store"></i> Create Supplier</button>
+            <button type="button" class="staff-btn secondary compact" id="btn-create-supplier"><i class="ti ti-building-store"></i> Register Supplier</button>
           </div>
         </div>
         <div class="staff-kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
@@ -322,6 +327,20 @@
       <label>Username
         <input type="text" id="managed-username" autocomplete="off" placeholder="Enter username">
       </label>
+      <label id="managed-company-group" style="display:none">Company Name
+        <input type="text" id="managed-company-name" autocomplete="organization" placeholder="Enter supplier company name">
+      </label>
+      <label id="managed-email-group" style="display:none">Email
+        <input type="email" id="managed-email" autocomplete="email" placeholder="orders@supplier.ph">
+      </label>
+      <label id="managed-phone-group" style="display:none">Phone
+        <input type="text" id="managed-phone" autocomplete="tel" placeholder="+63 9XX XXX XXXX">
+      </label>
+      <div id="managed-catalog-group" style="display:none">
+        <label>Offered Ingredients</label>
+        <div id="managed-catalog-rows"></div>
+        <button type="button" class="staff-btn secondary compact" id="managed-catalog-add" style="margin-top:8px"><i class="ti ti-plus"></i> Add Ingredient</button>
+      </div>
       <label id="managed-password-group">Temporary Password
         <input type="password" id="managed-password" autocomplete="new-password" placeholder="Enter temporary password">
       </label>
@@ -329,6 +348,35 @@
     <div class="staff-modal-actions">
       <button type="button" class="staff-btn secondary" id="user-modal-cancel">Cancel</button>
       <button type="button" class="staff-btn primary" id="user-modal-save">Save Account</button>
+    </div>
+  </div>
+</div>
+
+<div class="staff-modal-backdrop" id="ingredient-modal" hidden>
+  <div class="staff-modal" role="dialog" aria-modal="true" aria-labelledby="ingredient-modal-title">
+    <div class="staff-modal-header">
+      <div>
+        <h2 id="ingredient-modal-title">Add Ingredient</h2>
+        <p>Register a new inventory item with supplier pricing</p>
+      </div>
+      <button type="button" class="staff-modal-close" id="ingredient-modal-close" aria-label="Close"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="staff-modal-body">
+      <input type="hidden" id="ingredient-edit-id">
+      <label>Ingredient Name<input type="text" id="ingredient-name" placeholder="e.g. Chicken Breast"></label>
+      <label>Supplier<select id="ingredient-supplier"></select></label>
+      <div class="staff-form-row">
+        <label>Agreed Price (₱)<input type="number" id="ingredient-price" min="0" step="0.01" placeholder="e.g. 220"></label>
+        <label>Reorder Threshold<input type="number" id="ingredient-threshold" min="0" step="0.01" placeholder="e.g. 25"></label>
+      </div>
+      <div class="staff-form-row">
+        <label>Unit<input type="text" id="ingredient-unit" placeholder="kg, L, pcs" value="kg"></label>
+        <label>Starting Quantity<input type="number" id="ingredient-stock" min="0" step="0.01" placeholder="0" value="0"></label>
+      </div>
+    </div>
+    <div class="staff-modal-actions">
+      <button type="button" class="staff-btn secondary" id="ingredient-modal-cancel">Cancel</button>
+      <button type="button" class="staff-btn primary" id="ingredient-modal-save">Save Ingredient</button>
     </div>
   </div>
 </div>

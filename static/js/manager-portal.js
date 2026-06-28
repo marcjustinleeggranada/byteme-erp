@@ -1,7 +1,8 @@
 (function () {
   "use strict";
 
-  var PAGE_SIZE = 10;
+  var PAGE_SIZE = 5;
+  var inventoryPollTimer = null;
   var SCREEN_META = {
     dashboard: { title: "Dashboard Overview", subtitle: "Procurement, inventory, and team oversight" },
     "inventory-list": { title: "Inventory Management", subtitle: "Monitor stock levels and reorder risk" },
@@ -418,17 +419,43 @@
   function filteredInventory() {
     var query = ($("inventory-search") && $("inventory-search").value || "").trim().toLowerCase();
     var statusFilter = ($("inventory-status-filter") && $("inventory-status-filter").value) || "all";
+    var supplierFilter = ($("inventory-supplier-filter") && $("inventory-supplier-filter").value || "").trim().toLowerCase();
     return inventory.filter(function (item) {
       var matchesQuery = !query ||
         String(item.id).toLowerCase().indexOf(query) !== -1 ||
-        (item.name || "").toLowerCase().indexOf(query) !== -1;
+        (item.name || "").toLowerCase().indexOf(query) !== -1 ||
+        (item.supplier || "").toLowerCase().indexOf(query) !== -1;
+      var matchesSupplier = !supplierFilter || (item.supplier || "").toLowerCase() === supplierFilter;
       var status = getStockStatus(item);
       var matchesStatus = statusFilter === "all" || status === statusFilter;
-      return matchesQuery && matchesStatus;
+      return matchesQuery && matchesStatus && matchesSupplier;
     });
   }
 
+  function populateSupplierFilter() {
+    var select = $("inventory-supplier-filter");
+    if (!select) return;
+    var current = select.value;
+    var names = inventory.map(function (item) { return item.supplier; }).filter(Boolean);
+    var unique = names.filter(function (name, index) { return names.indexOf(name) === index; }).sort();
+    select.innerHTML = '<option value="">All suppliers</option>' + unique.map(function (name) {
+      return '<option value="' + escapeAttr(name) + '">' + escapeHtml(name) + "</option>";
+    }).join("");
+    if (current) select.value = current;
+  }
+
+  function populateIngredientSupplierSelect() {
+    var select = $("ingredient-supplier");
+    if (!select) return;
+    var current = select.value;
+    select.innerHTML = '<option value="">Select supplier</option>' + suppliers.map(function (supplier) {
+      return '<option value="' + escapeAttr(supplier.name) + '">' + escapeHtml(supplier.name) + "</option>";
+    }).join("");
+    if (current) select.value = current;
+  }
+
   function renderInventoryList() {
+    populateSupplierFilter();
     var tbody = $("manager-inventory-tbody");
     if (!tbody) return;
     var items = filteredInventory();
@@ -439,7 +466,7 @@
     var pageItems = items.slice(start, start + PAGE_SIZE);
 
     if (!pageItems.length) {
-      tbody.innerHTML = emptyRow(7, "No inventory items match your filters.");
+      tbody.innerHTML = emptyRow(9, "No inventory items match your filters.");
     } else {
       tbody.innerHTML = pageItems.map(function (item) {
         var status = getStockStatus(item);
@@ -450,8 +477,13 @@
           "<td>" + escapeHtml(item.supplier || "—") + "</td>" +
           "<td>" + escapeHtml(formatQty(item.stock)) + "</td>" +
           "<td>" + escapeHtml(formatQty(item.threshold)) + "</td>" +
+          "<td>" + escapeHtml(formatCurrency(item.price || 0)) + "</td>" +
           "<td>" + escapeHtml(item.unit || "—") + "</td>" +
           "<td>" + statusBadge(status) + "</td>" +
+          '<td><div class="staff-table-actions">' +
+          '<button type="button" class="staff-btn secondary compact" data-inventory-action="edit" data-inventory-id="' + item.id + '"><i class="ti ti-edit"></i> Edit</button>' +
+          '<button type="button" class="staff-btn danger compact" data-inventory-action="delete" data-inventory-id="' + item.id + '"><i class="ti ti-trash"></i> Remove</button>' +
+          "</div></td>" +
           "</tr>"
         );
       }).join("");
@@ -595,10 +627,13 @@
 
     tbody.innerHTML = users.map(function (user) {
       var roleLabel = user.role === "supplier" ? "Supplier" : "Inventory Staff";
+      var displayName = user.displayName || user.username;
       var statusBadgeHtml = user.disabled ? statusBadge("rejected", "Disabled") : statusBadge("in-stock", "Active");
       return (
         "<tr>" +
-        "<td><strong>" + escapeHtml(user.username) + "</strong></td>" +
+        "<td><strong>" + escapeHtml(displayName) + "</strong>" +
+        (displayName !== user.username ? '<br><span style="color:var(--muted);font-size:9px">' + escapeHtml(user.username) + "</span>" : "") +
+        "</td>" +
         "<td>" + escapeHtml(roleLabel) + "</td>" +
         "<td>" + statusBadgeHtml + "</td>" +
         '<td><div class="staff-table-actions">' +
@@ -610,6 +645,12 @@
         "</tr>"
       );
     }).join("");
+
+    var createStaffBtn = $("btn-create-staff");
+    if (createStaffBtn) {
+      createStaffBtn.disabled = staffCount >= 1;
+      createStaffBtn.title = staffCount >= 1 ? "Only one Inventory Staff account is allowed." : "";
+    }
   }
 
   function renderSupport() {
@@ -643,12 +684,23 @@
 
   function renderAll() {
     renderDashboard();
+    populateIngredientSupplierSelect();
     renderInventoryList();
     renderPurchaseRequests();
     renderPurchaseOrders();
     renderDeliveries();
     renderUsers();
     renderSupport();
+  }
+
+  function startInventoryPolling() {
+    if (inventoryPollTimer) clearInterval(inventoryPollTimer);
+    inventoryPollTimer = setInterval(function () {
+      Promise.all([loadDashboard(), loadInventory(), loadActivity()]).then(function () {
+        renderDashboard();
+        renderInventoryList();
+      }).catch(function () { /* ignore transient poll errors */ });
+    }, 15000);
   }
 
   function refreshData() {
@@ -764,8 +816,115 @@
     $("managed-password").value = "";
     $("managed-user-role").value = role || "staff";
     $("managed-password-group").style.display = "block";
-    $("user-modal-title").textContent = role === "supplier" ? "Create Supplier Account" : "Create Inventory Staff Account";
+    if ($("managed-company-group")) $("managed-company-group").style.display = role === "supplier" ? "block" : "none";
+    if ($("managed-email-group")) $("managed-email-group").style.display = role === "supplier" ? "block" : "none";
+    if ($("managed-phone-group")) $("managed-phone-group").style.display = role === "supplier" ? "block" : "none";
+    if ($("managed-catalog-group")) $("managed-catalog-group").style.display = role === "supplier" ? "block" : "none";
+    var usernameGroup = $("managed-username") && $("managed-username").closest("label");
+    if (usernameGroup) usernameGroup.style.display = role === "supplier" ? "none" : "block";
+    if ($("managed-company-name")) $("managed-company-name").value = "";
+    if ($("managed-email")) $("managed-email").value = "";
+    if ($("managed-phone")) $("managed-phone").value = "";
+    if (role === "supplier") renderCatalogRows([{ itemName: "", price: "", unit: "kg", threshold: 10 }]);
+    $("user-modal-title").textContent = role === "supplier" ? "Register Supplier" : "Create Inventory Staff Account";
     modal.hidden = false;
+  }
+
+  function renderCatalogRows(rows) {
+    var container = $("managed-catalog-rows");
+    if (!container) return;
+    container.innerHTML = rows.map(function (row, index) {
+      return (
+        '<div class="staff-form-row catalog-row" data-index="' + index + '">' +
+        '<label>Ingredient<input type="text" class="catalog-item-name" value="' + escapeAttr(row.itemName || "") + '" placeholder="Ingredient name"></label>' +
+        '<label>Price (₱)<input type="number" class="catalog-item-price" min="0" step="0.01" value="' + escapeAttr(row.price || "") + '" placeholder="Agreed price"></label>' +
+        '<label>Unit<input type="text" class="catalog-item-unit" value="' + escapeAttr(row.unit || "kg") + '" placeholder="kg"></label>' +
+        '<label>Threshold<input type="number" class="catalog-item-threshold" min="0" step="0.01" value="' + escapeAttr(row.threshold || 10) + '" placeholder="10"></label>' +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  function collectCatalogRows() {
+    return Array.prototype.slice.call(document.querySelectorAll(".catalog-row")).map(function (row) {
+      return {
+        itemName: (row.querySelector(".catalog-item-name") && row.querySelector(".catalog-item-name").value || "").trim(),
+        price: parseFloat(row.querySelector(".catalog-item-price") && row.querySelector(".catalog-item-price").value) || 0,
+        unit: (row.querySelector(".catalog-item-unit") && row.querySelector(".catalog-item-unit").value || "kg").trim() || "kg",
+        threshold: parseFloat(row.querySelector(".catalog-item-threshold") && row.querySelector(".catalog-item-threshold").value) || 10,
+      };
+    }).filter(function (entry) { return entry.itemName && entry.price > 0; });
+  }
+
+  function openIngredientModal(item) {
+    var modal = $("ingredient-modal");
+    if (!modal) return;
+    populateIngredientSupplierSelect();
+    $("ingredient-edit-id").value = item ? item.id : "";
+    $("ingredient-name").value = item ? item.name : "";
+    $("ingredient-name").readOnly = !!item;
+    $("ingredient-supplier").value = item ? (item.supplier || "") : "";
+    $("ingredient-price").value = item ? (item.price || "") : "";
+    $("ingredient-threshold").value = item ? (item.threshold || "") : "";
+    $("ingredient-unit").value = item ? (item.unit || "kg") : "kg";
+    $("ingredient-stock").value = item ? (item.stock || 0) : 0;
+    $("ingredient-stock").readOnly = !!item;
+    $("ingredient-modal-title").textContent = item ? "Edit Ingredient" : "Add Ingredient";
+    modal.hidden = false;
+  }
+
+  function closeIngredientModal() {
+    var modal = $("ingredient-modal");
+    if (modal) modal.hidden = true;
+  }
+
+  function saveIngredient() {
+    var editId = ($("ingredient-edit-id") && $("ingredient-edit-id").value) || "";
+    var payload;
+    if (editId) {
+      payload = {
+        id: Number(editId),
+        threshold: parseFloat($("ingredient-threshold") && $("ingredient-threshold").value) || 0,
+        price: parseFloat($("ingredient-price") && $("ingredient-price").value) || 0,
+      };
+      apiFetch("/api/inventory/update", { method: "POST", body: JSON.stringify(payload) })
+        .then(function () {
+          closeIngredientModal();
+          showToast("Ingredient updated.");
+          return refreshData();
+        })
+        .catch(function (err) { showToast(err.message, "error"); });
+      return;
+    }
+    payload = {
+      name: ($("ingredient-name") && $("ingredient-name").value || "").trim(),
+      supplier: ($("ingredient-supplier") && $("ingredient-supplier").value || "").trim(),
+      price: parseFloat($("ingredient-price") && $("ingredient-price").value) || 0,
+      threshold: parseFloat($("ingredient-threshold") && $("ingredient-threshold").value) || 0,
+      unit: ($("ingredient-unit") && $("ingredient-unit").value || "kg").trim() || "kg",
+      stock: parseFloat($("ingredient-stock") && $("ingredient-stock").value) || 0,
+    };
+    if (!payload.name || !payload.supplier) {
+      showToast("Enter ingredient name and supplier.", "error");
+      return;
+    }
+    apiFetch("/api/inventory/add", { method: "POST", body: JSON.stringify(payload) })
+      .then(function () {
+        closeIngredientModal();
+        showToast("Ingredient added to inventory.");
+        return refreshData();
+      })
+      .catch(function (err) { showToast(err.message, "error"); });
+  }
+
+  function deleteIngredient(itemId) {
+    if (!confirm("Remove this ingredient from inventory and supplier product lists?")) return;
+    apiFetch("/api/inventory/delete", { method: "POST", body: JSON.stringify({ id: itemId }) })
+      .then(function () {
+        showToast("Ingredient removed.");
+        return refreshData();
+      })
+      .catch(function (err) { showToast(err.message, "error"); });
   }
 
   function closeUserModal() {
@@ -781,6 +940,13 @@
     $("managed-user-role").value = user.role;
     $("managed-password").value = "";
     $("managed-password-group").style.display = "none";
+    if ($("managed-company-group")) {
+      $("managed-company-group").style.display = user.role === "supplier" ? "block" : "none";
+      if ($("managed-company-name")) $("managed-company-name").value = user.companyName || "";
+    }
+    if ($("managed-email-group")) $("managed-email-group").style.display = "none";
+    if ($("managed-phone-group")) $("managed-phone-group").style.display = "none";
+    if ($("managed-catalog-group")) $("managed-catalog-group").style.display = "none";
     $("user-modal-title").textContent = "Edit Account";
     $("user-modal").hidden = false;
   }
@@ -793,9 +959,24 @@
     var payload = { username: username, role: role };
     if (id) payload.id = Number(id);
     if (!id) payload.password = password;
+    if (role === "supplier") {
+      payload.companyName = ($("managed-company-name") && $("managed-company-name").value || "").trim();
+      payload.email = ($("managed-email") && $("managed-email").value || "").trim();
+      payload.phone = ($("managed-phone") && $("managed-phone").value || "").trim();
+      payload.catalog = collectCatalogRows();
+      if (!id) payload.username = payload.companyName;
+    }
 
-    if (!username) {
+    if (role === "staff" && !id && !username) {
       showToast("Enter a username.", "error");
+      return;
+    }
+    if (role === "supplier" && !id && !payload.companyName) {
+      showToast("Enter the supplier company name.", "error");
+      return;
+    }
+    if (role === "supplier" && !id && !payload.catalog.length) {
+      showToast("Add at least one offered ingredient with price.", "error");
       return;
     }
     if (!id && !password) {
@@ -806,7 +987,7 @@
     apiFetch("/api/users/save", { method: "POST", body: JSON.stringify(payload) })
       .then(function () {
         closeUserModal();
-        showToast(id ? "Account updated." : "Account created.");
+        showToast(id ? "Account updated." : (role === "supplier" ? "Supplier registered." : "Account created."));
         return refreshData();
       })
       .catch(function (err) {
@@ -851,13 +1032,44 @@
   function setupInventoryControls() {
     var search = $("inventory-search");
     var filter = $("inventory-status-filter");
+    var supplierFilter = $("inventory-supplier-filter");
     var prev = $("inventory-prev");
     var next = $("inventory-next");
+    var addBtn = $("btn-add-ingredient");
 
     if (search) search.addEventListener("input", function () { inventoryPage = 1; renderInventoryList(); });
     if (filter) filter.addEventListener("change", function () { inventoryPage = 1; renderInventoryList(); });
-    if (prev) prev.addEventListener("click", function () { if (inventoryPage > 1) { inventoryPage--; renderInventoryList(); } });
-    if (next) next.addEventListener("click", function () { inventoryPage++; renderInventoryList(); });
+    if (supplierFilter) supplierFilter.addEventListener("change", function () { inventoryPage = 1; renderInventoryList(); });
+    if (prev) prev.addEventListener("click", function () {
+      if (inventoryPage > 1) {
+        inventoryPage--;
+        renderInventoryList();
+      }
+    });
+    if (next) next.addEventListener("click", function () {
+      var items = filteredInventory();
+      var totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+      if (inventoryPage < totalPages) {
+        inventoryPage++;
+        renderInventoryList();
+      }
+    });
+    if (addBtn) addBtn.addEventListener("click", function () { openIngredientModal(null); });
+  }
+
+  function setupIngredientModal() {
+    var closeBtn = $("ingredient-modal-close");
+    var cancelBtn = $("ingredient-modal-cancel");
+    var saveBtn = $("ingredient-modal-save");
+    var modal = $("ingredient-modal");
+    if (closeBtn) closeBtn.addEventListener("click", closeIngredientModal);
+    if (cancelBtn) cancelBtn.addEventListener("click", closeIngredientModal);
+    if (saveBtn) saveBtn.addEventListener("click", saveIngredient);
+    if (modal) {
+      modal.addEventListener("click", function (event) {
+        if (event.target === modal) closeIngredientModal();
+      });
+    }
   }
 
   function setupManualPoForm() {
@@ -877,6 +1089,20 @@
 
     if (createStaff) createStaff.addEventListener("click", function () { openUserModal("staff"); });
     if (createSupplier) createSupplier.addEventListener("click", function () { openUserModal("supplier"); });
+    if ($("managed-user-role")) {
+      $("managed-user-role").addEventListener("change", function () {
+        var role = $("managed-user-role").value;
+        if ($("managed-company-group")) $("managed-company-group").style.display = role === "supplier" ? "block" : "none";
+        if ($("managed-email-group")) $("managed-email-group").style.display = role === "supplier" ? "block" : "none";
+        if ($("managed-phone-group")) $("managed-phone-group").style.display = role === "supplier" ? "block" : "none";
+        if ($("managed-catalog-group")) $("managed-catalog-group").style.display = role === "supplier" ? "block" : "none";
+      });
+    }
+    if ($("managed-catalog-add")) {
+      $("managed-catalog-add").addEventListener("click", function () {
+        renderCatalogRows(collectCatalogRows().concat([{ itemName: "", price: "", unit: "kg", threshold: 10 }]));
+      });
+    }
     if (closeBtn) closeBtn.addEventListener("click", closeUserModal);
     if (cancelBtn) cancelBtn.addEventListener("click", closeUserModal);
     if (saveBtn) saveBtn.addEventListener("click", saveManagedUser);
@@ -911,6 +1137,16 @@
         if (userAction === "edit") editUser(userId);
         else if (userAction === "reset") resetUserPassword(userId);
         else if (userAction === "toggle") toggleUserDisabled(userId);
+        return;
+      }
+
+      var inventoryBtn = event.target.closest("[data-inventory-action]");
+      if (inventoryBtn) {
+        var inventoryAction = inventoryBtn.getAttribute("data-inventory-action");
+        var inventoryId = Number(inventoryBtn.getAttribute("data-inventory-id"));
+        var item = inventory.find(function (i) { return i.id === inventoryId; });
+        if (inventoryAction === "edit" && item) openIngredientModal(item);
+        else if (inventoryAction === "delete") deleteIngredient(inventoryId);
       }
     });
 
@@ -928,10 +1164,12 @@
     setupNavGroups();
     setupMobileNav();
     setupInventoryControls();
+    setupIngredientModal();
     setupManualPoForm();
     setupUserModal();
     setupDelegatedActions();
     refreshData();
+    startInventoryPolling();
   }
 
   if (document.readyState === "loading") {

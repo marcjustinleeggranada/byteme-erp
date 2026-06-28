@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var PAGE_SIZE = 10;
+  var PAGE_SIZE = 5;
   var SCREEN_META = {
     dashboard: { title: "Dashboard Overview", subtitle: "Inventory operations and receiving activity" },
     "inventory-list": { title: "Inventory List", subtitle: "Browse and filter current stock levels" },
@@ -594,7 +594,7 @@
     if (!select) return;
     var current = select.value;
     select.innerHTML = '<option value="">Select item</option>' + inventory.map(function (item) {
-      return '<option value="' + item.id + '" data-unit="' + escapeHtml(item.unit || "pcs") + '">' + escapeHtml(item.name) + "</option>";
+      return '<option value="' + item.id + '" data-unit="' + escapeHtml(item.unit || "pcs") + '" data-reorder-qty="' + escapeHtml(item.reorderQty || "") + '">' + escapeHtml(item.name) + "</option>";
     }).join("");
     if (current) select.value = current;
   }
@@ -656,8 +656,13 @@
       itemSelect.addEventListener("change", function () {
         var option = itemSelect.options[itemSelect.selectedIndex];
         var unitInput = $("pr-unit");
+        var qtyInput = $("pr-qty");
         if (unitInput && option) {
           unitInput.value = option.getAttribute("data-unit") || "pcs";
+        }
+        if (qtyInput && option) {
+          var reorderQty = option.getAttribute("data-reorder-qty");
+          qtyInput.value = reorderQty || "";
         }
       });
     }
@@ -708,27 +713,28 @@
     var typeSelect = $("adjustment-type");
     var quantityInput = $("adjustment-quantity");
     var stockInput = $("adjustment-current-stock");
+    var newStockInput = $("adjustment-new-stock");
 
     function setBaselineStock(item) {
       adjustmentBaselineStock = item ? Number(item.stock || 0) : null;
       if (stockInput) {
-        stockInput.value = adjustmentBaselineStock != null ? adjustmentBaselineStock : "";
+        stockInput.value = adjustmentBaselineStock != null ? formatQty(adjustmentBaselineStock, item && item.unit) : "";
       }
+      previewStockFromQuantity();
     }
 
     function previewStockFromQuantity() {
-      if (!stockInput || adjustmentBaselineStock == null || !typeSelect || !quantityInput) return;
+      if (adjustmentBaselineStock == null || !typeSelect || !quantityInput) return;
       var qty = parseFloat(quantityInput.value);
       if (!qty || qty <= 0) {
-        stockInput.value = adjustmentBaselineStock;
+        if (newStockInput) newStockInput.value = adjustmentBaselineStock != null ? formatQty(adjustmentBaselineStock) : "";
         return;
       }
       var type = typeSelect.value;
-      if (type === "Damaged" || type === "Expired") {
-        stockInput.value = Math.max(0, adjustmentBaselineStock - qty);
-      } else if (type === "Correction") {
-        stockInput.value = Math.max(0, adjustmentBaselineStock + qty);
-      }
+      var nextStock = adjustmentBaselineStock;
+      if (type === "Add") nextStock = Math.max(0, adjustmentBaselineStock + qty);
+      else if (type === "Deduct") nextStock = Math.max(0, adjustmentBaselineStock - qty);
+      if (newStockInput) newStockInput.value = formatQty(nextStock);
     }
 
     if (itemSelect) {
@@ -746,26 +752,21 @@
         if (form) form.reset();
         adjustmentBaselineStock = null;
         if (stockInput) stockInput.value = "";
+        if (newStockInput) newStockInput.value = "";
       });
     }
 
     if (form) {
       form.addEventListener("submit", function (e) {
         e.preventDefault();
-        var newStock = parseFloat(stockInput && stockInput.value);
         var payload = {
           itemId: Number($("adjustment-item") && $("adjustment-item").value),
           type: typeSelect && typeSelect.value,
           quantity: parseFloat(quantityInput && quantityInput.value),
-          reason: ($("adjustment-reason") && $("adjustment-reason").value || "").trim(),
-          newStock: Number.isFinite(newStock) ? newStock : null
+          reason: ($("adjustment-reason") && $("adjustment-reason").value || "").trim()
         };
-        if (!payload.itemId || !payload.type || !payload.reason || !payload.quantity) {
+        if (!payload.itemId || !payload.type || !payload.reason || !payload.quantity || payload.quantity <= 0) {
           showToast("Complete all adjustment fields.", "error");
-          return;
-        }
-        if (payload.newStock == null || payload.newStock < 0) {
-          showToast("Enter a valid current stock level.", "error");
           return;
         }
         apiFetch("/api/staff/adjustments", { method: "POST", body: JSON.stringify(payload) })
@@ -774,6 +775,7 @@
             form.reset();
             adjustmentBaselineStock = null;
             if (stockInput) stockInput.value = "";
+            if (newStockInput) newStockInput.value = "";
             return refreshData();
           })
           .catch(function (err) {
@@ -977,8 +979,20 @@
 
     if (search) search.addEventListener("input", function () { inventoryPage = 1; renderInventoryList(); });
     if (filter) filter.addEventListener("change", function () { inventoryPage = 1; renderInventoryList(); });
-    if (prev) prev.addEventListener("click", function () { if (inventoryPage > 1) { inventoryPage--; renderInventoryList(); } });
-    if (next) next.addEventListener("click", function () { inventoryPage++; renderInventoryList(); });
+    if (prev) prev.addEventListener("click", function () {
+      if (inventoryPage > 1) {
+        inventoryPage--;
+        renderInventoryList();
+      }
+    });
+    if (next) next.addEventListener("click", function () {
+      var items = filteredInventory();
+      var totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+      if (inventoryPage < totalPages) {
+        inventoryPage++;
+        renderInventoryList();
+      }
+    });
   }
 
   function setupHistoryControls() {

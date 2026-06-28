@@ -8,6 +8,7 @@
     "po-new": { title: "New Purchase Orders", subtitle: "Orders waiting for your response" },
     "po-accepted": { title: "Accepted Orders", subtitle: "Confirmed orders ready for delivery" },
     "po-rejected": { title: "Rejected Orders", subtitle: "Orders declined by your company" },
+    catalog: { title: "Ingredient Pricing", subtitle: "Update agreed prices for your supplied ingredients" },
     "generate-qr": { title: "Generate Delivery QR Code", subtitle: "Create scannable codes for accepted orders" },
     "delivery-history": { title: "Delivery History", subtitle: "Track shipments and generated QR codes" },
     support: { title: "Support Request", subtitle: "Get help from Byte Me procurement" }
@@ -19,6 +20,7 @@
   var profile = {};
   var dashboard = {};
   var supportTickets = [];
+  var catalog = [];
   var pendingConfirm = null;
   var toastTimer = null;
 
@@ -828,7 +830,7 @@
     var actFeed = $("supplier-activity-feed");
     if (actFeed) {
       if (!activity.length) {
-        actFeed.innerHTML = emptyFeed("No recent activity to display.");
+        actFeed.innerHTML = emptyFeed("No recent activity yet.");
       } else {
         actFeed.innerHTML = activity.slice(0, 6).map(function (log) {
           var icon = "ti-activity";
@@ -849,6 +851,56 @@
     if ($("dash-business-address")) $("dash-business-address").textContent = prof.businessAddress || "—";
   }
 
+  function renderCatalogPricing() {
+    var tbody = $("catalog-pricing-tbody");
+    if (!tbody) return;
+    if (!catalog.length) {
+      tbody.innerHTML = '<tr><td colspan="3" class="empty-state">No ingredients assigned to your company yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = catalog.map(function (entry, index) {
+      return (
+        "<tr>" +
+        "<td>" + escapeHtml(entry.itemName) + "</td>" +
+        "<td>" + formatMoney(entry.price) + "</td>" +
+        '<td><input type="number" min="0" step="0.01" data-catalog-index="' + index + '" class="catalog-price-input" value="' + escapeHtml(entry.price) + '"></td>' +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  function loadCatalog() {
+    return apiFetch("/api/supplier/catalog").then(function (data) {
+      catalog = Array.isArray(data.catalog) ? data.catalog : [];
+      return catalog;
+    }).catch(function () {
+      catalog = [];
+      return catalog;
+    });
+  }
+
+  function saveCatalogPrices() {
+    var updates = Array.prototype.slice.call(document.querySelectorAll(".catalog-price-input")).map(function (input) {
+      var index = Number(input.getAttribute("data-catalog-index"));
+      return {
+        itemName: catalog[index] && catalog[index].itemName,
+        price: parseFloat(input.value) || 0,
+      };
+    }).filter(function (entry) { return entry.itemName && entry.price > 0; });
+    if (!updates.length) {
+      showToast("No valid price updates to save.", "error");
+      return;
+    }
+    apiFetch("/api/supplier/catalog", { method: "POST", body: JSON.stringify({ catalog: updates }) })
+      .then(function (result) {
+        showToast("Prices updated. The manager has been notified.");
+        return loadCatalog().then(renderCatalogPricing);
+      })
+      .catch(function (err) {
+        showToast(err.message || "Could not save prices.", "error");
+      });
+  }
+
   function renderAll() {
     renderDashboard();
     renderPoNew();
@@ -857,6 +909,7 @@
     renderQrSelect();
     renderDeliveryHistory();
     renderSupportTickets();
+    renderCatalogPricing();
   }
 
   function loadDashboard() {
@@ -907,7 +960,8 @@
       loadDeliveries(),
       loadActivity(),
       loadProfile(),
-      loadSupport()
+      loadSupport(),
+      loadCatalog()
     ]).then(renderAll).catch(function (err) {
       showToast(err.message || "Failed to load portal data.", "error");
     });
@@ -979,6 +1033,11 @@
     }
   }
 
+  function setupCatalogPricing() {
+    var saveBtn = $("catalog-save-btn");
+    if (saveBtn) saveBtn.addEventListener("click", saveCatalogPrices);
+  }
+
   function init() {
     if (window.PortalProfile) window.PortalProfile.loadHeaderProfile();
     setupNavigation();
@@ -989,6 +1048,7 @@
     setupDeliveryHistoryControls();
     setupQrGenerator();
     setupSupportForm();
+    setupCatalogPricing();
     refreshData();
   }
 

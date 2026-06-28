@@ -44,10 +44,41 @@ class ManagerCredential(db.Model):
     password_changed_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
 
 PASSWORD_EXPIRY_DAYS = 30
+PASSWORD_CHANGE_COOLDOWN_DAYS = 30
 PASSWORD_MIN_LENGTH = 10
 PASSWORD_HISTORY_LIMIT = 3
 PASSWORD_REQUIREMENT_MESSAGE = "Password must contain at least 10 characters, including uppercase, lowercase, number, and special character."
+SAME_PASSWORD_MESSAGE = "New password can't be the same as the current password."
+PASSWORD_CHANGE_COOLDOWN_MESSAGE = "You can only change your password once every 30 days. Please try again later."
 LOGIN_ERROR_MESSAGE = "Please enter the correct username and password."
+
+PO_STATUS_PRIORITY = {
+    "Awaiting approval": 0,
+    "Waiting for Supplier": 1,
+    "Transmitted": 2,
+    "Accepted": 3,
+    "In Transit": 4,
+    "Delivered": 5,
+    "Partial": 6,
+    "Rejected": 7,
+    "Rejected by Supplier": 8,
+}
+
+def default_reorder_qty(threshold):
+    return max(float(threshold or 0) * 2, 50.0)
+
+def inventory_item_payload(item):
+    price = get_supplier_price(item.supplier_name, item.name)
+    return {
+        "id": item.id,
+        "name": item.name,
+        "stock": item.stock,
+        "threshold": item.threshold,
+        "unit": item.unit,
+        "supplier": item.supplier_name,
+        "price": price,
+        "reorderQty": default_reorder_qty(item.threshold),
+    }
 
 class Inventory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -212,55 +243,46 @@ def create_po_from_purchase_request(pr_record):
     return po
 
 def sync_low_stock_alerts():
-    """
-    Scans the entire inventory table. For any item at or below its threshold,
-    it automatically injects an 'Awaiting approval' order if one doesn't exist.
-    """
+    """Scan inventory and auto-create purchase requests for low-stock items."""
     low_items = Inventory.query.filter(Inventory.stock <= Inventory.threshold).all()
-    
     for item in low_items:
-        # Prevent duplicate orders: check if an 'Awaiting approval' order already exists for this item
-        existing_po = PurchaseOrder.query.filter_by(
-            item_name=item.name,
-            status="Awaiting approval"
-        ).first()
-        
-        if not existing_po:
-            # Generate a clean, unique PO ID using the current timestamp
-            po_id = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}-{item.id}"
-            fallback_supplier = item.supplier_name if item.supplier_name else "Default Supplier"
-            
-            # Restock quantity defaults to double the safety threshold (or at least 50 units)
-            reorder_qty = max(item.threshold * 2, 50.0)
-            price = get_supplier_price(fallback_supplier, item.name)
-            
-            # Insert the automated draft order
-            auto_po = PurchaseOrder(
-                id=po_id,
-                item_name=item.name,
-                qty=reorder_qty,
-                unit=item.unit if item.unit else "pcs",
-                supplier=fallback_supplier,
-                status="Awaiting approval",
-                type="Auto-Generated",
-                total=reorder_qty * price,
-                date=datetime.now().strftime('%B %d, %Y')
-            )
-            
-            # Log it in the activity history
-            auto_log = ActivityLog(
-                event="Auto-Generated Draft Order",
-                item=item.name,
-                reference=po_id,
-                status="Awaiting approval",
-                time=datetime.now().strftime("%H:%M")
-            )
-            
-            db.session.add(auto_po)
-            db.session.add(auto_log)
-
-    # Commit any newly generated draft orders to the database
+        check_and_auto_purchase_request(item.id, requested_by="staff")
     db.session.commit()
+
+def check_and_auto_purchase_request(item_id, requested_by=None):
+    """Create a pending purchase request when stock drops to or below threshold."""
+    item = Inventory.query.get(item_id)
+    if not item or float(item.stock or 0) > float(item.threshold or 0):
+        return None
+
+    existing_pr = PurchaseRequest.query.filter_by(
+        item_name=item.name,
+        status="Pending",
+    ).first()
+    if existing_pr:
+        return existing_pr
+
+    reorder_qty = default_reorder_qty(item.threshold)
+    req_id = f"PR-AUTO-{datetime.now().strftime('%Y%m%d%H%M%S')}-{item.id}"
+    record = PurchaseRequest(
+        id=req_id,
+        item_name=item.name,
+        qty=reorder_qty,
+        unit=item.unit if item.unit else "pcs",
+        reason=f"Auto-generated: stock ({item.stock} {item.unit or 'units'}) at or below threshold ({item.threshold}).",
+        requested_by=requested_by or "staff",
+        status="Pending",
+        date=datetime.now().strftime("%B %d, %Y · %I:%M %p"),
+    )
+    db.session.add(record)
+    db.session.add(ActivityLog(
+        event="Auto Purchase Request Created",
+        item=item.name,
+        reference=req_id,
+        status="Pending",
+        time=datetime.now().strftime("%H:%M"),
+    ))
+    return record
 
 def seed_demo_data():
     """Populate sample suppliers, inventory, POs, and activity for first-run demos."""
@@ -501,35 +523,42 @@ def change_password():
     ensure_user_schema()
     username = session.get("manager_username") if role == "manager" else session.get("username")
     expired = bool(session.get("password_expired"))
+    cooldown_active = password_change_cooldown_active(role, username, allow_if_expired=True)
+    days_until_change = password_days_until_change_allowed(role, username)
     error = None
 
     if request.method == "POST":
-        current_password = request.form.get("current_password", "")
-        new_password = request.form.get("new_password", "")
-        confirm_password = request.form.get("confirm_password", "")
-
-        if new_password != confirm_password:
-            error = "New password and confirmation do not match."
-        elif not password_meets_requirements(new_password):
-            error = PASSWORD_REQUIREMENT_MESSAGE
-        elif password_was_used_recently(role, username, new_password):
-            error = "You cannot reuse any of your last 3 passwords."
-        elif role == "manager":
-            account = ManagerCredential.query.filter_by(username=username).first()
-            if not account or not check_password_hash(account.password_hash, current_password):
-                error = "Current password is incorrect."
-            else:
-                record_password_history("manager", username, account.password_hash)
-                account.password_hash = generate_password_hash(new_password)
-                account.password_changed_at = datetime.now()
+        if cooldown_active and not expired:
+            error = PASSWORD_CHANGE_COOLDOWN_MESSAGE
         else:
-            user = User.query.filter_by(username=username, role=role).first()
-            if not user or not check_password_hash(user.password_hash, current_password):
-                error = "Current password is incorrect."
+            current_password = request.form.get("current_password", "")
+            new_password = request.form.get("new_password", "")
+            confirm_password = request.form.get("confirm_password", "")
+
+            if new_password != confirm_password:
+                error = "New password and confirmation do not match."
+            elif not password_meets_requirements(new_password):
+                error = PASSWORD_REQUIREMENT_MESSAGE
+            elif password_matches_current(role, username, new_password):
+                error = SAME_PASSWORD_MESSAGE
+            elif password_was_used_recently(role, username, new_password):
+                error = "You cannot reuse any of your last 3 passwords."
+            elif role == "manager":
+                account = ManagerCredential.query.filter_by(username=username).first()
+                if not account or not check_password_hash(account.password_hash, current_password):
+                    error = "Current password is incorrect."
+                else:
+                    record_password_history("manager", username, account.password_hash)
+                    account.password_hash = generate_password_hash(new_password)
+                    account.password_changed_at = datetime.now()
             else:
-                record_password_history(role, username, user.password_hash)
-                user.password_hash = generate_password_hash(new_password)
-                user.password_changed_at = datetime.now()
+                user = User.query.filter_by(username=username, role=role).first()
+                if not user or not check_password_hash(user.password_hash, current_password):
+                    error = "Current password is incorrect."
+                else:
+                    record_password_history(role, username, user.password_hash)
+                    user.password_hash = generate_password_hash(new_password)
+                    user.password_changed_at = datetime.now()
 
         if not error:
             db.session.commit()
@@ -537,7 +566,17 @@ def change_password():
             destination = "/manager" if role == "manager" else f"/{role}"
             return f'<script>alert("Password updated successfully."); window.location.href="{destination}";</script>'
 
-    return render_template("change_password.html", username=username, role=role, expired=expired, error=error, requirement_message=PASSWORD_REQUIREMENT_MESSAGE)
+    return render_template(
+        "change_password.html",
+        username=username,
+        role=role,
+        expired=expired,
+        error=error,
+        requirement_message=PASSWORD_REQUIREMENT_MESSAGE,
+        cooldown_active=cooldown_active and not expired,
+        days_until_change=days_until_change,
+        cooldown_message=PASSWORD_CHANGE_COOLDOWN_MESSAGE,
+    )
 
 def manager_api_allowed():
     return bool(session.get("manager_authenticated"))
@@ -569,21 +608,84 @@ def record_password_history(account_type, account_key, password_hash):
     for old in histories[PASSWORD_HISTORY_LIMIT:]:
         db.session.delete(old)
 
+def password_matches_current(account_type, account_key, new_password):
+    if account_type == "manager":
+        account = ManagerCredential.query.filter_by(username=account_key).first()
+    else:
+        account = User.query.filter_by(username=account_key, role=account_type).first()
+    return bool(account and check_password_hash(account.password_hash, new_password))
+
+def password_change_cooldown_active(role, username, allow_if_expired=True):
+    if role == "manager":
+        account = ManagerCredential.query.filter_by(username=username).first()
+        if not account or not account.password_changed_at:
+            return False
+        if allow_if_expired and manager_password_is_expired(account):
+            return False
+        return datetime.now() - account.password_changed_at < timedelta(days=PASSWORD_CHANGE_COOLDOWN_DAYS)
+    user = User.query.filter_by(username=username, role=role).first()
+    if not user or not user.password_changed_at:
+        return False
+    if allow_if_expired and password_is_expired(user):
+        return False
+    return datetime.now() - user.password_changed_at < timedelta(days=PASSWORD_CHANGE_COOLDOWN_DAYS)
+
+def password_days_until_change_allowed(role, username):
+    changed_at = None
+    if role == "manager":
+        account = ManagerCredential.query.filter_by(username=username).first()
+        changed_at = account.password_changed_at if account else None
+    else:
+        user = User.query.filter_by(username=username, role=role).first()
+        changed_at = user.password_changed_at if user else None
+    if not changed_at:
+        return 0
+    next_allowed = changed_at + timedelta(days=PASSWORD_CHANGE_COOLDOWN_DAYS)
+    return max(0, (next_allowed - datetime.now()).days + (1 if (next_allowed - datetime.now()).seconds > 0 else 0))
+
 def password_was_used_recently(account_type, account_key, new_password):
     histories = PasswordHistory.query.filter_by(account_type=account_type, account_key=account_key).order_by(PasswordHistory.id.desc()).limit(PASSWORD_HISTORY_LIMIT).all()
     for entry in histories:
         if check_password_hash(entry.password_hash, new_password):
             return True
-    if account_type == "manager":
-        account = ManagerCredential.query.filter_by(username=account_key).first()
-    else:
-        account = User.query.filter_by(username=account_key, role=account_type).first()
-    if account and check_password_hash(account.password_hash, new_password):
-        return True
     return False
 
 def supplier_api_allowed():
     return session.get("role") == "supplier" and not session.get("password_expired")
+
+def sync_supplier_catalog_price(supplier_name, item_name, price):
+    supplier = Supplier.query.filter_by(name=supplier_name).first()
+    if not supplier:
+        return
+    try:
+        catalog = json.loads(supplier.catalog or "[]")
+    except (TypeError, json.JSONDecodeError):
+        catalog = []
+    updated = False
+    for entry in catalog:
+        if entry.get("itemName", "").lower() == item_name.lower():
+            entry["price"] = float(price)
+            updated = True
+            break
+    if not updated:
+        catalog.append({"itemName": item_name, "price": float(price)})
+    supplier.catalog = json.dumps(catalog)
+
+def add_catalog_items_to_inventory(supplier_name, catalog, default_stock=0):
+    for entry in catalog or []:
+        item_name = str(entry.get("itemName", "")).strip()
+        if not item_name:
+            continue
+        existing = Inventory.query.filter(db.func.lower(Inventory.name) == item_name.lower()).first()
+        if existing:
+            continue
+        db.session.add(Inventory(
+            name=item_name,
+            stock=float(entry.get("stock", default_stock) or 0),
+            threshold=float(entry.get("threshold", 10) or 10),
+            unit=str(entry.get("unit", "pcs") or "pcs"),
+            supplier_name=supplier_name,
+        ))
 
 def get_supplier_company_for_user(username):
     user = User.query.filter_by(username=username, role="supplier").first()
@@ -686,12 +788,20 @@ def get_users():
         return jsonify({"error": "Unauthorized"}), 401
     ensure_user_schema()
     users = User.query.filter(User.role.in_(["staff", "supplier"])).order_by(User.role, User.username).all()
-    return jsonify([{
-        "id": user.id,
-        "username": user.username,
-        "role": user.role,
-        "disabled": user.is_disabled
-    } for user in users])
+    result = []
+    for user in users:
+        profile = UserProfile.query.filter_by(user_id=user.id).first()
+        company_name = profile.company_name if profile else ""
+        display_name = company_name if user.role == "supplier" and company_name else user.username
+        result.append({
+            "id": user.id,
+            "username": user.username,
+            "displayName": display_name,
+            "companyName": company_name,
+            "role": user.role,
+            "disabled": user.is_disabled,
+        })
+    return jsonify(result)
 
 @app.route("/api/users/save", methods=["POST"])
 def save_user():
@@ -703,7 +813,21 @@ def save_user():
     username = str(data.get("username", "")).strip()
     role = str(data.get("role", "")).lower()
     password = str(data.get("password", ""))
-    if role not in {"staff", "supplier"} or not username:
+    company_name = str(data.get("companyName", "")).strip()
+    catalog = data.get("catalog") or []
+    if role not in {"staff", "supplier"}:
+        return jsonify({"error": "A valid account type is required."}), 400
+    if role == "staff" and not user_id:
+        existing_staff = User.query.filter_by(role="staff", is_disabled=False).first()
+        if existing_staff:
+            return jsonify({"error": "Only one Inventory Staff account is allowed. Disable the existing account first."}), 409
+    if role == "supplier" and not user_id:
+        if not company_name:
+            return jsonify({"error": "Company name is required when registering a supplier."}), 400
+        if not catalog:
+            return jsonify({"error": "Add at least one ingredient with an agreed price."}), 400
+        username = company_name
+    if not username:
         return jsonify({"error": "A username and valid account type are required."}), 400
     duplicate = User.query.filter_by(username=username).first()
     if duplicate and duplicate.id != user_id:
@@ -714,16 +838,42 @@ def save_user():
             return jsonify({"error": "Account not found."}), 404
         user.username = username
         user.role = role
+        if role == "supplier" and company_name:
+            profile = UserProfile.query.filter_by(user_id=user.id).first() or UserProfile(user_id=user.id)
+            profile.company_name = company_name
+            db.session.add(profile)
     else:
         if not password_meets_requirements(password):
             return jsonify({"error": PASSWORD_REQUIREMENT_MESSAGE}), 400
         user = User(username=username, role=role, password_hash=generate_password_hash(password), password_changed_at=None)
         db.session.add(user)
         db.session.flush()
-        profile = UserProfile(user_id=user.id, supplier_id=f"SUP-{user.id:04d}" if role == "supplier" else "")
-        if role == "supplier" and data.get("companyName"):
-            profile.company_name = str(data.get("companyName")).strip()
+        profile = UserProfile(
+            user_id=user.id,
+            supplier_id=f"SUP-{user.id:04d}" if role == "supplier" else "",
+            company_name=company_name if role == "supplier" else "",
+        )
         db.session.add(profile)
+        if role == "supplier":
+            supplier_record = Supplier.query.filter_by(name=company_name).first()
+            if not supplier_record:
+                supplier_record = Supplier(
+                    name=company_name,
+                    email=str(data.get("email", "")).strip(),
+                    phone=str(data.get("phone", "")).strip(),
+                    catalog=json.dumps(catalog),
+                )
+                db.session.add(supplier_record)
+            else:
+                supplier_record.catalog = json.dumps(catalog)
+            add_catalog_items_to_inventory(company_name, catalog)
+            db.session.add(ActivityLog(
+                event="Supplier Registered",
+                item=company_name,
+                reference=profile.supplier_id,
+                status="Active",
+                time=datetime.now().strftime("%H:%M"),
+            ))
     db.session.commit()
     return jsonify({"status": "success"})
 
@@ -770,146 +920,108 @@ def forgot_password():
 @app.route("/api/inventory")
 def get_inventory():
     items = Inventory.query.all()
-
-    return jsonify([
-        {
-            "id": i.id,
-            "name": i.name,
-            "stock": i.stock,
-            "threshold": i.threshold,
-            "unit": i.unit,
-            "supplier": i.supplier_name
-        }
-        for i in items
-    ])
+    return jsonify([inventory_item_payload(i) for i in items])
 
 @app.route("/api/inventory/add", methods=["POST"])
 def add_inventory():
-    if not staff_api_allowed():
-        return jsonify({"error": "Inventory Staff access required"}), 403
-    data = request.json
-
+    if not manager_api_allowed():
+        return jsonify({"error": "Manager access required"}), 403
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    supplier = str(data.get("supplier", "")).strip()
+    if not name or not supplier:
+        return jsonify({"error": "Ingredient name and supplier are required."}), 400
+    if Inventory.query.filter(db.func.lower(Inventory.name) == name.lower()).first():
+        return jsonify({"error": "An ingredient with that name already exists."}), 409
+    try:
+        stock = float(data.get("stock", 0) or 0)
+        threshold = float(data.get("threshold", 0) or 0)
+        price = float(data.get("price", 150) or 150)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Enter valid numeric values for stock, threshold, and price."}), 400
     item = Inventory(
-        name=data["name"],
-        stock=data.get("stock",0),
-        threshold=data.get("threshold",0),
-        unit=data.get("unit"),
-        supplier_name=data.get("supplier")
+        name=name,
+        stock=stock,
+        threshold=threshold,
+        unit=str(data.get("unit", "pcs") or "pcs"),
+        supplier_name=supplier,
     )
-
     db.session.add(item)
+    sync_supplier_catalog_price(supplier, name, price)
+    db.session.flush()
+    check_and_auto_purchase_request(item.id, requested_by="staff")
     db.session.commit()
-    
-    # Check if newly added item is already under safety stock limits
-    check_and_auto_reorder(item.id)
-    return jsonify({"status":"success"})
+    return jsonify({"status": "success", "id": item.id})
 
 # --- AUTOMATIC REORDER TRIGGER FUNCTION ---
-def check_and_auto_reorder(item_id):
-    """
-    Checks if an item's stock has dropped to or below its threshold.
-    If so, automatically creates an 'Awaiting approval' Purchase Order.
-    """
-    item = Inventory.query.get(item_id)
-    if not item:
-        return
+def check_and_auto_reorder(item_id, requested_by=None):
+    """Backward-compatible alias that creates an auto purchase request."""
+    return check_and_auto_purchase_request(item_id, requested_by=requested_by)
 
-    # Check if stock is low
-    if item.stock <= item.threshold:
-        # Prevent duplicates: Check if there's already an active "Awaiting approval" order for this item
-        existing_po = PurchaseOrder.query.filter_by(
-            item_name=item.name, 
-            status="Awaiting approval"
-        ).first()
-        
-        if not existing_po:
-            # Calculate a standard reorder quantity (e.g., restocking up to double the threshold, or a flat default like 50)
-            reorder_qty = max(item.threshold * 2, 50.0) 
-            
-            # Generate a new Purchase Order entry
-            # Finding a fallback supplier if none is attached to the item catalog description
-            supplier_name = item.supplier_name if item.supplier_name else "Default Supplier"
-            po_id = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}-{item.id}"
-            
-            price = get_supplier_price(supplier_name, item.name)
-
-            auto_po = PurchaseOrder(
-                id=po_id,
-                item_name=item.name,
-                qty=reorder_qty,
-                unit=item.unit if item.unit else "pcs",
-                supplier=supplier_name,
-                status="Awaiting approval",
-                type="Auto-Generated",
-                total=reorder_qty * price,
-                date=datetime.now().strftime('%B %d, %Y')
-            )
-            
-            # Log the event into the activity trail
-            auto_log = ActivityLog(
-                event="Auto-Generated Purchase Order",
-                item=item.name,
-                reference=po_id,
-                status="Awaiting approval",
-                time=datetime.now().strftime("%H:%M")
-            )
-            
-            db.session.add(auto_po)
-            db.session.add(auto_log)
-            db.session.commit()
-
-# --- UPDATE INVENTORY REST API ROUTE ---
-# Ensure that whenever an endpoint modifies inventory stock downwards, the check triggers.
 @app.route("/api/inventory/update", methods=["POST"])
 def update_inventory():
-    if not staff_api_allowed():
-        return jsonify({"error": "Inventory Staff access required"}), 403
-    data = request.json
-    item_id = data.get("id")
-    new_stock = data.get("stock")
-    
-    item = Inventory.query.get(item_id)
+    if not manager_api_allowed():
+        return jsonify({"error": "Manager access required"}), 403
+    data = request.get_json(silent=True) or {}
+    item = Inventory.query.get(data.get("id"))
     if not item:
         return jsonify({"status": "error", "message": "Item not found"}), 404
-        
-    item.stock = new_stock
+    if "threshold" in data:
+        try:
+            item.threshold = float(data.get("threshold", item.threshold))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Enter a valid threshold."}), 400
+    if "price" in data:
+        try:
+            price = float(data.get("price"))
+            sync_supplier_catalog_price(item.supplier_name, item.name, price)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Enter a valid price."}), 400
+    if "stock" in data:
+        try:
+            item.stock = float(data.get("stock", item.stock))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Enter a valid stock level."}), 400
     db.session.commit()
-    
-    # Trigger the automated check right after updating the database stock level
-    check_and_auto_reorder(item.id)
-    sync_low_stock_alerts()
+    check_and_auto_purchase_request(item.id, requested_by="staff")
+    db.session.commit()
     return jsonify({"status": "success"})
 
 @app.route("/api/inventory/delete", methods=["POST"])
 def delete_inventory():
-    if not staff_api_allowed():
-        return jsonify({"error": "Inventory Staff access required"}), 403
-    data=request.json
-    item=Inventory.query.get(data["id"])
-    
+    if not manager_api_allowed():
+        return jsonify({"error": "Manager access required"}), 403
+    data = request.get_json(silent=True) or {}
+    item = Inventory.query.get(data.get("id"))
     if item:
+        supplier = Supplier.query.filter_by(name=item.supplier_name).first()
+        if supplier and supplier.catalog:
+            try:
+                catalog = json.loads(supplier.catalog)
+                catalog = [entry for entry in catalog if entry.get("itemName", "").lower() != item.name.lower()]
+                supplier.catalog = json.dumps(catalog)
+            except (TypeError, json.JSONDecodeError):
+                pass
         db.session.delete(item)
         db.session.commit()
-
-    return jsonify({"status":"success"})
+    return jsonify({"status": "success"})
 
 @app.route("/api/inventory/update-threshold", methods=["POST"])
 def update_threshold():
-    if not staff_api_allowed():
-        return jsonify({"error": "Inventory Staff access required"}), 403
-    data = request.json
-    item = Inventory.query.get(data["id"])
-
+    if not manager_api_allowed():
+        return jsonify({"error": "Manager access required"}), 403
+    data = request.get_json(silent=True) or {}
+    item = Inventory.query.get(data.get("id"))
     if item:
-        item.threshold = data["threshold"]
+        try:
+            item.threshold = float(data.get("threshold", item.threshold))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Enter a valid threshold."}), 400
         db.session.commit()
-        
-        # Trigger reorder if the threshold update pushed the requirement beyond current stock
-        check_and_auto_reorder(item.id)
-
-        return jsonify({"status":"success"})
-
-    return jsonify({"status":"error"})
+        check_and_auto_purchase_request(item.id, requested_by="staff")
+        db.session.commit()
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error"}), 404
 
 # SUPPLIER API
 @app.route("/api/suppliers")
@@ -931,18 +1043,18 @@ def get_suppliers():
 def add_supplier():
     if not manager_api_allowed():
         return jsonify({"error": "Manager access required"}), 403
-    data=request.json
-
-    supplier=Supplier(
+    data = request.get_json(silent=True) or {}
+    catalog = data.get("catalog", [])
+    supplier = Supplier(
         name=data["name"],
-        email=data["email"],
-        phone=data["phone"],
-        catalog=json.dumps(data.get("catalog",[]))
+        email=data.get("email"),
+        phone=data.get("phone"),
+        catalog=json.dumps(catalog),
     )
-
     db.session.add(supplier)
+    add_catalog_items_to_inventory(data["name"], catalog)
     db.session.commit()
-    return jsonify({"status":"success"})
+    return jsonify({"status": "success"})
 
 @app.route("/api/suppliers/delete",methods=["POST"])
 def delete_supplier():
@@ -960,19 +1072,19 @@ def delete_supplier():
 # PURCHASE ORDER API
 @app.route("/api/purchase-orders")
 def get_purchase_orders():
-    orders=PurchaseOrder.query.all()
-
+    orders = PurchaseOrder.query.all()
+    orders.sort(key=lambda o: (PO_STATUS_PRIORITY.get(o.status, 99), o.id or ""))
     return jsonify([
         {
-            "id":o.id,
-            "itemName":o.item_name,
-            "qty":o.qty,
-            "unit":o.unit,
-            "supplier":o.supplier,
-            "total":o.total,
-            "status":o.status,
-            "type":o.type,
-            "date":o.date
+            "id": o.id,
+            "itemName": o.item_name,
+            "qty": o.qty,
+            "unit": o.unit,
+            "supplier": o.supplier,
+            "total": o.total,
+            "status": o.status,
+            "type": o.type,
+            "date": o.date
         }
         for o in orders
     ])
@@ -1032,20 +1144,53 @@ def reject_po():
 # ACTIVITY LOG
 @app.route("/api/activity")
 def get_activity():
-    logs=ActivityLog.query.order_by(
-        ActivityLog.id.desc()
-    ).all()
-
+    role = session.get("role")
+    if role == "supplier" and supplier_api_allowed():
+        return jsonify(get_supplier_activity_payload())
+    logs = ActivityLog.query.order_by(ActivityLog.id.desc()).all()
     return jsonify([
         {
-            "event":l.event,
-            "item":l.item,
-            "reference":l.reference,
-            "status":l.status,
-            "time":l.time
+            "event": l.event,
+            "item": l.item,
+            "reference": l.reference,
+            "status": l.status,
+            "time": l.time,
         }
         for l in logs
     ])
+
+def get_supplier_activity_payload():
+    company = get_supplier_company_for_user(session.get("username"))
+    if not company:
+        return []
+    supplier = Supplier.query.filter_by(name=company).first()
+    catalog_items = set()
+    if supplier and supplier.catalog:
+        try:
+            catalog_items = {entry.get("itemName", "") for entry in json.loads(supplier.catalog)}
+        except (TypeError, json.JSONDecodeError):
+            catalog_items = set()
+    po_ids = {po.id for po in PurchaseOrder.query.filter_by(supplier=company).all()}
+    logs = ActivityLog.query.order_by(ActivityLog.id.desc()).limit(100).all()
+    result = []
+    for log in logs:
+        if log.item == company or log.item in catalog_items or log.reference in po_ids:
+            result.append({
+                "event": log.event,
+                "item": log.item,
+                "reference": log.reference,
+                "status": log.status,
+                "time": log.time,
+            })
+        elif company.lower() in (log.event or "").lower():
+            result.append({
+                "event": log.event,
+                "item": log.item,
+                "reference": log.reference,
+                "status": log.status,
+                "time": log.time,
+            })
+    return result[:20]
 
 @app.route("/api/activity/add",methods=["POST"])
 def add_activity():
@@ -1106,23 +1251,16 @@ def create_staff_adjustment():
         quantity = float(data.get("quantity", 0))
     except (TypeError, ValueError):
         quantity = 0
-    if not item or adjustment_type not in {"Damaged", "Expired", "Correction"} or not reason or quantity == 0:
+    if not item or adjustment_type not in {"Add", "Deduct", "Damaged", "Expired", "Correction"} or not reason or quantity <= 0:
         return jsonify({"error": "Complete all adjustment fields with a valid quantity."}), 400
 
     previous_stock = float(item.stock or 0)
-    new_stock_raw = data.get("newStock")
-    if new_stock_raw is not None and new_stock_raw != "":
-        try:
-            new_stock = max(0, float(new_stock_raw))
-        except (TypeError, ValueError):
-            return jsonify({"error": "Enter a valid current stock level."}), 400
-        recorded_quantity = new_stock - previous_stock
-    elif adjustment_type in {"Damaged", "Expired"}:
+    if adjustment_type in {"Add", "Correction"}:
+        new_stock = max(0, previous_stock + abs(quantity))
+        recorded_quantity = abs(quantity)
+    else:
         new_stock = max(0, previous_stock - abs(quantity))
         recorded_quantity = -abs(quantity)
-    else:
-        new_stock = max(0, previous_stock + quantity)
-        recorded_quantity = quantity
 
     item.stock = new_stock
     timestamp = datetime.now().strftime("%B %d, %Y · %I:%M %p")
@@ -1140,7 +1278,8 @@ def create_staff_adjustment():
     db.session.add(record)
     db.session.add(ActivityLog(event="Stock Adjustment Recorded", item=item.name, reference=reason, status=adjustment_type, time=datetime.now().strftime("%H:%M")))
     db.session.commit()
-    check_and_auto_reorder(item.id)
+    check_and_auto_purchase_request(item.id, requested_by=session.get("username", "staff"))
+    db.session.commit()
     return jsonify({"status": "success", "newStock": new_stock})
 
 @app.route("/api/staff/deliveries")
@@ -1336,7 +1475,8 @@ def get_purchase_requests():
             return jsonify({"error": "Unauthorized"}), 403
         requests_list = PurchaseRequest.query.filter_by(requested_by=session.get("username")).order_by(PurchaseRequest.id.desc()).all()
     elif manager_api_allowed():
-        requests_list = PurchaseRequest.query.order_by(PurchaseRequest.id.desc()).all()
+        requests_list = PurchaseRequest.query.all()
+        requests_list.sort(key=lambda r: (0 if r.status == "Pending" else 1 if r.status == "Approved" else 2, r.id or ""))
     else:
         return jsonify({"error": "Unauthorized"}), 401
     return jsonify([{
@@ -1509,6 +1649,63 @@ def supplier_deliveries():
         "date": o.date,
     } for o in orders if o.status in {"Accepted", "In Transit", "Delivered", "Partial", "Waiting for Supplier"}])
 
+@app.route("/api/supplier/catalog", methods=["GET", "POST"])
+def supplier_catalog_api():
+    if not supplier_api_allowed():
+        return jsonify({"error": "Supplier access required"}), 403
+    company = get_supplier_company_for_user(session.get("username"))
+    supplier = Supplier.query.filter_by(name=company).first()
+    if not supplier:
+        return jsonify({"error": "Supplier catalog not found."}), 404
+    if request.method == "GET":
+        try:
+            catalog = json.loads(supplier.catalog or "[]")
+        except (TypeError, json.JSONDecodeError):
+            catalog = []
+        return jsonify({"companyName": company, "catalog": catalog})
+    data = request.get_json(silent=True) or {}
+    updates = data.get("catalog") or []
+    if not updates:
+        return jsonify({"error": "No catalog updates provided."}), 400
+    try:
+        catalog = json.loads(supplier.catalog or "[]")
+    except (TypeError, json.JSONDecodeError):
+        catalog = []
+    changed_items = []
+    for update in updates:
+        item_name = str(update.get("itemName", "")).strip()
+        if not item_name:
+            continue
+        try:
+            new_price = float(update.get("price"))
+        except (TypeError, ValueError):
+            continue
+        old_price = None
+        found = False
+        for entry in catalog:
+            if entry.get("itemName", "").lower() == item_name.lower():
+                old_price = float(entry.get("price", 0))
+                if old_price != new_price:
+                    entry["price"] = new_price
+                    changed_items.append((item_name, old_price, new_price))
+                found = True
+                break
+        if not found:
+            catalog.append({"itemName": item_name, "price": new_price})
+            changed_items.append((item_name, None, new_price))
+    supplier.catalog = json.dumps(catalog)
+    for item_name, old_price, new_price in changed_items:
+        note = f"{item_name}: ₱{old_price:.2f} → ₱{new_price:.2f}" if old_price is not None else f"{item_name}: ₱{new_price:.2f}"
+        db.session.add(ActivityLog(
+            event="Supplier Price Updated",
+            item=company,
+            reference=note,
+            status="Pending Review",
+            time=datetime.now().strftime("%H:%M"),
+        ))
+    db.session.commit()
+    return jsonify({"status": "success", "changed": len(changed_items)})
+
 @app.route("/api/dashboard/manager")
 def manager_dashboard():
     if not manager_api_allowed():
@@ -1584,9 +1781,9 @@ def initialize_app():
                 role="staff",
                 password_changed_at=None
             ))
-        if not User.query.filter_by(username="supplier").first():
+        if not User.query.filter_by(username="supplier").first() and not User.query.filter_by(username="Metro Meats Supply").first():
             supplier_user = User(
-                username="supplier",
+                username="Metro Meats Supply",
                 password_hash=generate_password_hash("Supplier@2026"),
                 role="supplier",
                 password_changed_at=None
@@ -1602,6 +1799,13 @@ def initialize_app():
                 contact_number="+63 917 555 0101",
                 business_address="123 Industrial Ave, Quezon City",
             ))
+        else:
+            legacy_supplier = User.query.filter_by(username="supplier", role="supplier").first()
+            if legacy_supplier:
+                profile = UserProfile.query.filter_by(user_id=legacy_supplier.id).first()
+                company = profile.company_name if profile and profile.company_name else "Metro Meats Supply"
+                if not User.query.filter_by(username=company).first() or company == "supplier":
+                    legacy_supplier.username = company if company != "supplier" else "Metro Meats Supply"
         db.session.commit()
 
 initialize_app()
