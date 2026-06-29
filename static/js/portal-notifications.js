@@ -32,6 +32,9 @@
   }
 
   function apiFetch(url, options) {
+    if (window.PortalApi && window.PortalApi.fetch) {
+      return window.PortalApi.fetch(url, options);
+    }
     options = options || {};
     var headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
     return fetch(url, Object.assign({}, options, { headers: headers, credentials: "same-origin" }))

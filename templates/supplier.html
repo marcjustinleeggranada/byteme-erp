@@ -29,12 +29,13 @@
     .po-actions { display:flex; gap:6px; flex-wrap:wrap; }
     @media(max-width:760px){ .company-info-grid,.summary-stat-row{ grid-template-columns:1fr; } }
   </style>
+  <script defer src="{{ url_for('static', filename='js/portal-api.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/portal-profile.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/portal-sidebar.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/portal-notifications.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/supplier-portal.js') }}"></script>
 </head>
-<body data-username="{{ username }}">
+<body data-username="{{ username }}" data-portal-role="supplier">
 <div class="staff-app">
   <aside class="staff-sidebar" id="supplier-sidebar">
     <div class="staff-brand"><div class="staff-brand-mark">B</div><div class="staff-brand-copy"><strong>Byte Me</strong><span>Supplier Portal</span></div></div>
@@ -66,7 +67,7 @@
       <div class="staff-nav-label">Settings</div>
       <a class="staff-nav-item" data-title="Company Profile" href="/profile"><i class="ti ti-building-store"></i><span>Company Profile</span></a>
       <a class="staff-nav-item" data-title="Change Password" href="/change-password"><i class="ti ti-key"></i><span>Change Password</span></a>
-      <a class="staff-nav-item" data-title="Logout" href="/logout"><i class="ti ti-logout"></i><span>Logout</span></a>
+      <a class="staff-nav-item" data-title="Logout" href="/logout?portal=supplier"><i class="ti ti-logout"></i><span>Logout</span></a>
     </div>
   </aside>
   <div class="staff-sidebar-overlay" id="supplier-sidebar-overlay"></div>
@@ -206,12 +207,13 @@
             <option value="all">All statuses</option>
             <option value="pending">Pending / In Transit</option>
             <option value="completed">Completed</option>
+            <option value="rejected">Rejected</option>
             <option value="generated">QR Generated (local)</option>
           </select>
         </div>
         <div class="staff-table-card">
           <table>
-            <thead><tr><th>Delivery ID</th><th>PO #</th><th>Item</th><th>Quantity</th><th>Status</th><th>Date</th><th>Source</th></tr></thead>
+            <thead><tr><th>Delivery ID</th><th>PO #</th><th>Item</th><th>Quantity</th><th>Status</th><th>Date</th><th>Details / Actions</th></tr></thead>
             <tbody id="delivery-history-tbody"></tbody>
           </table>
         </div>

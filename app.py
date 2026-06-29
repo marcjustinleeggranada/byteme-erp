@@ -22,7 +22,76 @@ elif DATABASE_URL.startswith("postgres://"):
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 300}
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
 db = SQLAlchemy(app)
+
+PORTAL_ROLE_HEADER = "X-Portal-Role"
+
+def active_portal_role():
+    header = (request.headers.get(PORTAL_ROLE_HEADER) or "").strip().lower()
+    if header in {"manager", "staff", "supplier"}:
+        return header
+    return session.get("role")
+
+def get_portals():
+    return session.get("portals") or {}
+
+def portal_data(role):
+    return get_portals().get(role) or {}
+
+def set_portal_data(role, data):
+    portals = dict(get_portals())
+    portals[role] = data
+    session["portals"] = portals
+    session.permanent = True
+    session.modified = True
+    sync_legacy_session_keys(role)
+
+def sync_legacy_session_keys(role):
+    session["role"] = role
+    ps = portal_data(role)
+    if role == "manager":
+        session["manager_authenticated"] = bool(ps.get("authenticated"))
+        session["manager_username"] = ps.get("username")
+        session["password_expired"] = bool(ps.get("password_expired"))
+    elif role in {"staff", "supplier"}:
+        session["username"] = ps.get("username")
+        session["password_expired"] = bool(ps.get("password_expired"))
+
+def migrate_legacy_session():
+    if get_portals():
+        return
+    portals = {}
+    if session.get("manager_authenticated"):
+        portals["manager"] = {
+            "authenticated": True,
+            "username": session.get("manager_username"),
+            "password_expired": bool(session.get("password_expired")),
+        }
+    role = session.get("role")
+    if role in {"staff", "supplier"} and session.get("username"):
+        portals[role] = {
+            "username": session.get("username"),
+            "password_expired": bool(session.get("password_expired")),
+        }
+    if portals:
+        session["portals"] = portals
+
+@app.before_request
+def _prepare_portal_session():
+    migrate_legacy_session()
+
+def portal_username(role=None):
+    role = role or active_portal_role()
+    return portal_data(role).get("username")
+
+MANAGER_ACTIVITY_KEYWORDS = (
+    "purchase request", "purchase order", "supplier", "delivery", "user", "account",
+    "support", "ingredient", "inventory", "approved", "rejected", "registered", "restock",
+)
+STAFF_ACTIVITY_KEYWORDS = (
+    "stock", "adjustment", "purchase request", "delivery", "receiving", "inventory", "support",
+)
 
 # Database Tables
 class User(db.Model):
@@ -101,10 +170,12 @@ class PurchaseOrder(db.Model):
     qty = db.Column(db.Float)
     unit = db.Column(db.String(20))
     supplier = db.Column(db.String(100))
+    supplier_id = db.Column(db.String(20), nullable=True)
     total = db.Column(db.Float)
     status = db.Column(db.String(50))
     type = db.Column(db.String(50))
     date = db.Column(db.String(50))
+    expected_delivery_date = db.Column(db.String(50), nullable=True)
     source_pr_id = db.Column(db.String(50), nullable=True)
 
 class ActivityLog(db.Model):
@@ -146,6 +217,9 @@ class ReceivingRecord(db.Model):
     status = db.Column(db.String(50), nullable=False)
     received_by = db.Column(db.String(120), nullable=False)
     date_received = db.Column(db.String(80), nullable=False)
+    rejection_reason = db.Column(db.Text, nullable=True)
+    resolution_action = db.Column(db.String(50), nullable=True)
+    resolution_status = db.Column(db.String(50), nullable=True)
 
 class ManagerProfile(db.Model):
     username = db.Column(db.String(120), primary_key=True)
@@ -239,8 +313,22 @@ def purchase_orders_for_supplier(username):
         if supplier_matches_company(order.supplier, company)
     ]
 
+def parse_delivery_lookup(raw):
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text.upper().startswith("BYTEME:"):
+        text = text.split(":", 1)[1].strip()
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            payload = json.loads(text)
+            return str(payload.get("deliveryId") or payload.get("poId") or "").strip()
+        except (TypeError, json.JSONDecodeError):
+            pass
+    return text
+
 def find_order_for_delivery_lookup(delivery_id):
-    lookup = str(delivery_id or "").strip()
+    lookup = parse_delivery_lookup(delivery_id)
     if not lookup:
         return None
     receipt = ReceivingRecord.query.filter(
@@ -285,6 +373,9 @@ def create_po_from_purchase_request(pr_record):
     unit = pr_record.unit or (item.unit if item else "pcs")
     price = get_supplier_price(supplier, pr_record.item_name)
     po_id = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    supplier_record = Supplier.query.filter_by(name=supplier).first()
+    supplier_id = f"SUP-{supplier_record.id:04d}" if supplier_record else ""
+    expected_delivery = (datetime.now() + timedelta(days=3)).strftime("%B %d, %Y")
 
     po = PurchaseOrder(
         id=po_id,
@@ -292,10 +383,12 @@ def create_po_from_purchase_request(pr_record):
         qty=pr_record.qty,
         unit=unit,
         supplier=supplier,
+        supplier_id=supplier_id,
         total=pr_record.qty * price,
         status="Waiting for Supplier",
         type="From Purchase Request",
         date=datetime.now().strftime("%B %d, %Y"),
+        expected_delivery_date=expected_delivery,
         source_pr_id=pr_record.id,
     )
     db.session.add(po)
@@ -516,43 +609,55 @@ def login_page():
 
 @app.route("/staff")
 def staff():
-    if session.get("role") != "staff":
+    ps = portal_data("staff")
+    if not ps.get("username"):
         return redirect("/")
-    if session.get("password_expired"):
-        return redirect("/change-password")
-    user = User.query.filter_by(username=session.get("username"), role="staff").first()
+    sync_legacy_session_keys("staff")
+    if ps.get("password_expired"):
+        return redirect("/change-password?portal=staff")
+    user = User.query.filter_by(username=ps.get("username"), role="staff").first()
     days_remaining = password_days_remaining(user) if user else PASSWORD_EXPIRY_DAYS
-    return render_template("staff.html", username=session.get("username", "staff"), days_remaining=days_remaining)
+    return render_template("staff.html", username=ps.get("username", "staff"), days_remaining=days_remaining)
 
 @app.route("/manager")
 def manager():
-    if not session.get("manager_authenticated"):
+    ps = portal_data("manager")
+    if not ps.get("authenticated"):
         return redirect("/")
-    if session.get("password_expired"):
-        return redirect("/change-password")
-    mgr = ManagerCredential.query.filter_by(username=session.get("manager_username")).first()
+    sync_legacy_session_keys("manager")
+    if ps.get("password_expired"):
+        return redirect("/change-password?portal=manager")
+    mgr = ManagerCredential.query.filter_by(username=ps.get("username")).first()
     days_remaining = manager_password_days_remaining(mgr) if mgr else PASSWORD_EXPIRY_DAYS
-    return render_template("manager.html", is_manager=True, username=session.get("manager_username", "mgr.primary"), days_remaining=days_remaining)
+    return render_template("manager.html", is_manager=True, username=ps.get("username", "mgr.primary"), days_remaining=days_remaining)
 
 @app.route("/profile")
 def profile_page():
-    role = session.get("role")
+    role = request.args.get("portal") or active_portal_role()
     if role not in {"manager", "staff", "supplier"}:
         return redirect("/")
-    if session.get("password_expired"):
-        return redirect("/change-password")
-    username = session.get("manager_username") if role == "manager" else session.get("username")
+    ps = portal_data(role)
+    if role == "manager" and not ps.get("authenticated"):
+        return redirect("/")
+    if role in {"staff", "supplier"} and not ps.get("username"):
+        return redirect("/")
+    sync_legacy_session_keys(role)
+    if ps.get("password_expired"):
+        return redirect(f"/change-password?portal={role}")
+    username = portal_username(role)
     return render_template("profile.html", username=username, role=role)
 
 @app.route("/supplier")
 def supplier():
-    if session.get("role") != "supplier":
+    ps = portal_data("supplier")
+    if not ps.get("username"):
         return redirect("/")
-    if session.get("password_expired"):
-        return redirect("/change-password")
-    user = User.query.filter_by(username=session.get("username"), role="supplier").first()
+    sync_legacy_session_keys("supplier")
+    if ps.get("password_expired"):
+        return redirect("/change-password?portal=supplier")
+    user = User.query.filter_by(username=ps.get("username"), role="supplier").first()
     days_remaining = password_days_remaining(user) if user else PASSWORD_EXPIRY_DAYS
-    return render_template("supplier.html", username=session.get("username", "supplier"), days_remaining=days_remaining)
+    return render_template("supplier.html", username=ps.get("username", "supplier"), days_remaining=days_remaining)
 
 # login
 @app.route("/login", methods=["POST"])
@@ -565,13 +670,14 @@ def login():
     if selected_role == "manager":
         manager_account = ManagerCredential.query.filter_by(username=username).first()
         if manager_account and check_password_hash(manager_account.password_hash, password):
-            session.clear()
-            session["manager_authenticated"] = True
-            session["manager_username"] = username
-            session["role"] = "manager"
-            if manager_password_is_expired(manager_account):
-                session["password_expired"] = True
-                return redirect("/change-password")
+            expired = manager_password_is_expired(manager_account)
+            set_portal_data("manager", {
+                "authenticated": True,
+                "username": username,
+                "password_expired": expired,
+            })
+            if expired:
+                return redirect("/change-password?portal=manager")
             return redirect("/manager")
         return login_error_response()
 
@@ -584,28 +690,47 @@ def login():
     if selected_role not in {"staff", "supplier"} or account_role != selected_role:
         return login_error_response()
 
-    session.clear()
-    session["role"] = account_role
-    session["username"] = user.username
-    if password_is_expired(user):
-        session["password_expired"] = True
-        return redirect("/change-password")
+    expired = password_is_expired(user)
+    set_portal_data(account_role, {
+        "username": user.username,
+        "password_expired": expired,
+    })
+    if expired:
+        return redirect(f"/change-password?portal={account_role}")
     return redirect("/staff" if account_role == "staff" else "/supplier")
 
 @app.route("/logout")
 def logout():
-    session.clear()
+    role = request.args.get("portal") or active_portal_role() or session.get("role")
+    portals = dict(get_portals())
+    if role in portals:
+        del portals[role]
+    session["portals"] = portals
+    if session.get("role") == role:
+        session.pop("role", None)
+        session.pop("username", None)
+        session.pop("manager_authenticated", None)
+        session.pop("manager_username", None)
+        session.pop("password_expired", None)
+    if not get_portals():
+        session.clear()
     return redirect("/")
 
 @app.route("/change-password", methods=["GET", "POST"])
 def change_password():
-    role = session.get("role")
+    role = request.args.get("portal") or session.get("role")
     if role not in {"manager", "staff", "supplier"}:
         return redirect("/")
+    ps = portal_data(role)
+    if role == "manager" and not ps.get("authenticated"):
+        return redirect("/")
+    if role in {"staff", "supplier"} and not ps.get("username"):
+        return redirect("/")
+    sync_legacy_session_keys(role)
 
     ensure_user_schema()
-    username = session.get("manager_username") if role == "manager" else session.get("username")
-    expired = bool(session.get("password_expired"))
+    username = portal_username(role)
+    expired = bool(ps.get("password_expired"))
     cooldown_active = password_change_cooldown_active(role, username, allow_if_expired=True)
     days_until_change = password_days_until_change_allowed(role, username)
     error = None
@@ -645,6 +770,9 @@ def change_password():
 
         if not error:
             db.session.commit()
+            ps = dict(portal_data(role))
+            ps["password_expired"] = False
+            set_portal_data(role, ps)
             session.pop("password_expired", None)
             destination = "/manager" if role == "manager" else f"/{role}"
             return f'<script>alert("Password updated successfully."); window.location.href="{destination}";</script>'
@@ -662,7 +790,10 @@ def change_password():
     )
 
 def manager_api_allowed():
-    return bool(session.get("manager_authenticated"))
+    if active_portal_role() != "manager":
+        return False
+    ps = portal_data("manager")
+    return bool(ps.get("authenticated") and not ps.get("password_expired"))
 
 def login_error_response():
     return f'<script>alert("{LOGIN_ERROR_MESSAGE}"); window.history.back();</script>'
@@ -734,7 +865,10 @@ def password_was_used_recently(account_type, account_key, new_password):
     return False
 
 def supplier_api_allowed():
-    return session.get("role") == "supplier" and not session.get("password_expired")
+    if active_portal_role() != "supplier":
+        return False
+    ps = portal_data("supplier")
+    return bool(ps.get("username") and not ps.get("password_expired"))
 
 def sync_supplier_catalog_price(supplier_name, item_name, price):
     supplier = Supplier.query.filter_by(name=supplier_name).first()
@@ -843,6 +977,17 @@ def ensure_user_schema():
         pr_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(purchase_request)"))}
         if "supplier_name" not in pr_columns:
             db.session.execute(text("ALTER TABLE purchase_request ADD COLUMN supplier_name VARCHAR(100)"))
+        if "supplier_id" not in po_columns:
+            db.session.execute(text("ALTER TABLE purchase_order ADD COLUMN supplier_id VARCHAR(20)"))
+        if "expected_delivery_date" not in po_columns:
+            db.session.execute(text("ALTER TABLE purchase_order ADD COLUMN expected_delivery_date VARCHAR(50)"))
+        recv_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(receiving_record)"))}
+        if "rejection_reason" not in recv_columns:
+            db.session.execute(text("ALTER TABLE receiving_record ADD COLUMN rejection_reason TEXT"))
+        if "resolution_action" not in recv_columns:
+            db.session.execute(text("ALTER TABLE receiving_record ADD COLUMN resolution_action VARCHAR(50)"))
+        if "resolution_status" not in recv_columns:
+            db.session.execute(text("ALTER TABLE receiving_record ADD COLUMN resolution_status VARCHAR(50)"))
     else:
         columns = {
             row[0]
@@ -870,6 +1015,22 @@ def ensure_user_schema():
         }
         if "supplier_name" not in pr_columns:
             db.session.execute(text("ALTER TABLE purchase_request ADD COLUMN supplier_name VARCHAR(100)"))
+        if "supplier_id" not in po_columns:
+            db.session.execute(text("ALTER TABLE purchase_order ADD COLUMN supplier_id VARCHAR(20)"))
+        if "expected_delivery_date" not in po_columns:
+            db.session.execute(text("ALTER TABLE purchase_order ADD COLUMN expected_delivery_date VARCHAR(50)"))
+        recv_columns = {
+            row[0]
+            for row in db.session.execute(text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'receiving_record'"
+            ))
+        }
+        if "rejection_reason" not in recv_columns:
+            db.session.execute(text("ALTER TABLE receiving_record ADD COLUMN rejection_reason TEXT"))
+        if "resolution_action" not in recv_columns:
+            db.session.execute(text("ALTER TABLE receiving_record ADD COLUMN resolution_action VARCHAR(50)"))
+        if "resolution_status" not in recv_columns:
+            db.session.execute(text("ALTER TABLE receiving_record ADD COLUMN resolution_status VARCHAR(50)"))
     db.session.commit()
     for username, initial_password in FIXED_MANAGER_ACCOUNTS.items():
         if not ManagerCredential.query.filter_by(username=username).first():
@@ -935,6 +1096,12 @@ def save_user():
         if role == "supplier" and company_name:
             profile = UserProfile.query.filter_by(user_id=user.id).first() or UserProfile(user_id=user.id)
             profile.company_name = company_name
+            if data.get("email"):
+                profile.email = str(data.get("email", "")).strip()
+            if data.get("phone"):
+                profile.contact_number = str(data.get("phone", "")).strip()
+            if data.get("contactPerson"):
+                profile.contact_person = str(data.get("contactPerson", "")).strip()
             db.session.add(profile)
     else:
         if not password_meets_requirements(password):
@@ -946,6 +1113,10 @@ def save_user():
             user_id=user.id,
             supplier_id=f"SUP-{user.id:04d}" if role == "supplier" else "",
             company_name=company_name if role == "supplier" else "",
+            contact_person=str(data.get("contactPerson", data.get("fullName", ""))).strip() or (company_name if role == "supplier" else ""),
+            email=str(data.get("email", "")).strip(),
+            contact_number=str(data.get("phone", data.get("contactNumber", ""))).strip(),
+            business_address=str(data.get("businessAddress", "")).strip(),
         )
         db.session.add(profile)
         if role == "supplier":
@@ -960,6 +1131,10 @@ def save_user():
                 db.session.add(supplier_record)
             else:
                 supplier_record.catalog = json.dumps(catalog)
+                if str(data.get("email", "")).strip():
+                    supplier_record.email = str(data.get("email", "")).strip()
+                if str(data.get("phone", "")).strip():
+                    supplier_record.phone = str(data.get("phone", "")).strip()
             add_catalog_items_to_inventory(company_name, catalog)
             db.session.add(ActivityLog(
                 event="Supplier Registered",
@@ -1244,25 +1419,39 @@ def reject_po():
     return jsonify({"status":"success"})
 
 # ACTIVITY LOG
+def activity_log_payload(log):
+    return {
+        "event": log.event,
+        "item": log.item,
+        "reference": log.reference,
+        "status": log.status,
+        "time": log.time,
+    }
+
+def get_role_filtered_activity(keywords):
+    logs = ActivityLog.query.order_by(ActivityLog.id.desc()).limit(120).all()
+    result = []
+    for log in logs:
+        event = (log.event or "").lower()
+        if any(keyword in event for keyword in keywords):
+            result.append(activity_log_payload(log))
+        if len(result) >= 20:
+            break
+    return result
+
 @app.route("/api/activity")
 def get_activity():
-    role = session.get("role")
+    role = active_portal_role()
     if role == "supplier" and supplier_api_allowed():
         return jsonify(get_supplier_activity_payload())
-    logs = ActivityLog.query.order_by(ActivityLog.id.desc()).all()
-    return jsonify([
-        {
-            "event": l.event,
-            "item": l.item,
-            "reference": l.reference,
-            "status": l.status,
-            "time": l.time,
-        }
-        for l in logs
-    ])
+    if role == "manager" and manager_api_allowed():
+        return jsonify(get_role_filtered_activity(MANAGER_ACTIVITY_KEYWORDS))
+    if role == "staff" and staff_api_allowed():
+        return jsonify(get_role_filtered_activity(STAFF_ACTIVITY_KEYWORDS))
+    return jsonify([])
 
 def get_supplier_activity_payload():
-    company = get_supplier_company_for_user(session.get("username"))
+    company = get_supplier_company_for_user(portal_username("supplier"))
     if not company:
         return []
     supplier = Supplier.query.filter_by(name=company).first()
@@ -1311,7 +1500,14 @@ def add_activity():
     return jsonify({"status":"success"})
 
 def staff_api_allowed():
-    return session.get("role") == "staff" and not session.get("password_expired")
+    if active_portal_role() != "staff":
+        return False
+    ps = portal_data("staff")
+    if not ps.get("username"):
+        return False
+    if ps.get("password_expired"):
+        return False
+    return True
 
 def delivery_id_for_po(po_id):
     clean_id = "".join(character for character in str(po_id) if character.isalnum())
@@ -1320,8 +1516,8 @@ def delivery_id_for_po(po_id):
 @app.route("/api/staff/profile")
 def staff_profile():
     if not staff_api_allowed():
-        return jsonify({"error": "Inventory Staff access required"}), 403
-    return jsonify({"username": session.get("username", "staff"), "role": "Inventory Staff"})
+        return jsonify({"error": "Your session has expired. Please sign in again."}), 403
+    return jsonify({"username": portal_username("staff") or "staff", "role": "Inventory Staff"})
 
 @app.route("/api/staff/adjustments")
 def staff_adjustments():
@@ -1374,13 +1570,13 @@ def create_staff_adjustment():
         reason=reason,
         previous_stock=previous_stock,
         new_stock=new_stock,
-        staff_username=session.get("username", "staff"),
+        staff_username=portal_username("staff") or "staff",
         date=timestamp
     )
     db.session.add(record)
     db.session.add(ActivityLog(event="Stock Adjustment Recorded", item=item.name, reference=reason, status=adjustment_type, time=datetime.now().strftime("%H:%M")))
     db.session.commit()
-    check_and_auto_purchase_request(item.id, requested_by=session.get("username", "staff"))
+    check_and_auto_purchase_request(item.id, requested_by=portal_username("staff") or "staff")
     db.session.commit()
     return jsonify({"status": "success", "newStock": new_stock})
 
@@ -1428,16 +1624,24 @@ def staff_delivery_detail(delivery_id):
     existing = ReceivingRecord.query.filter_by(po_id=order.id).first()
     pending_statuses = {"Transmitted", "Waiting for Supplier", "Accepted", "In Transit"}
     status = existing.status if existing else (order.status if order.status in pending_statuses else order.status or "Pending")
+    supplier_profile = Supplier.query.filter_by(name=order.supplier).first()
     return jsonify({
         "deliveryId": existing.delivery_id if existing else delivery_id_for_po(order.id),
         "poNumber": order.id,
         "supplier": order.supplier or "Unassigned Supplier",
+        "supplierId": order.supplier_id or "",
         "itemName": order.item_name,
         "expectedQuantity": order.qty,
         "unit": order.unit,
         "status": status,
+        "orderStatus": order.status,
+        "expectedDeliveryDate": order.expected_delivery_date or "—",
+        "orderDate": order.date,
+        "total": order.total,
         "alreadyReceived": bool(existing),
         "scanSuccess": True,
+        "supplierEmail": supplier_profile.email if supplier_profile else "",
+        "supplierPhone": supplier_profile.phone if supplier_profile else "",
     })
 
 @app.route("/api/staff/deliveries/confirm", methods=["POST"])
@@ -1456,9 +1660,12 @@ def confirm_staff_delivery():
         received_quantity = 0
     condition = str(data.get("condition", ""))
     decision = str(data.get("decision", ""))
+    rejection_reason = str(data.get("rejectionReason", "")).strip()
     status_map = {"complete": "Delivered", "partial": "Partial", "reject": "Rejected"}
     if decision not in status_map or condition not in {"Good Condition", "Damaged", "Partial Delivery"}:
         return jsonify({"error": "Select the item condition and receiving decision."}), 400
+    if decision == "reject" and not rejection_reason:
+        return jsonify({"error": "Enter a rejection reason."}), 400
     if decision != "reject" and received_quantity <= 0:
         return jsonify({"error": "Enter the quantity received."}), 400
 
@@ -1473,6 +1680,7 @@ def confirm_staff_delivery():
 
     timestamp = datetime.now().strftime("%B %d, %Y · %I:%M %p")
     delivery_id = delivery_id_for_po(order.id)
+    staff_user = portal_username("staff") or "staff"
     receipt = ReceivingRecord(
         delivery_id=delivery_id,
         po_id=order.id,
@@ -1482,8 +1690,10 @@ def confirm_staff_delivery():
         received_quantity=received_quantity,
         condition=condition,
         status=status,
-        received_by=session.get("username", "staff"),
-        date_received=timestamp
+        received_by=staff_user,
+        date_received=timestamp,
+        rejection_reason=rejection_reason if decision == "reject" else None,
+        resolution_status="Open" if decision == "reject" else None,
     )
     order.status = status
     db.session.add(receipt)
@@ -1494,7 +1704,7 @@ def confirm_staff_delivery():
         "manager",
         "delivery_verified",
         "Delivery Verified",
-        f"{session.get('username', 'staff')} recorded {status} for {order.item_name} ({delivery_id}).",
+        f"{staff_user} recorded {status} for {order.item_name} ({delivery_id}).",
         delivery_id,
     )
     create_notification(
@@ -1506,7 +1716,8 @@ def confirm_staff_delivery():
         delivery_id,
     )
     db.session.commit()
-    return jsonify({"status": "success", "deliveryStatus": status, "newStock": float(item.stock or 0) if item else None})
+    message = "Delivery verified and successfully delivered." if status == "Delivered" else f"Delivery recorded as {status}."
+    return jsonify({"status": "success", "deliveryStatus": status, "message": message, "newStock": float(item.stock or 0) if item else None})
 
 # READ-ONLY MANAGER DELIVERY MONITORING
 @app.route("/api/deliveries")
@@ -1553,10 +1764,16 @@ def save_delivery():
 
 @app.route("/api/profile", methods=["GET", "POST"])
 def api_profile():
-    role = session.get("role")
+    role = active_portal_role()
     if role not in {"manager", "staff", "supplier"}:
         return jsonify({"error": "Unauthorized"}), 401
-    username = session.get("manager_username") if role == "manager" else session.get("username")
+    if role == "manager" and not manager_api_allowed() and not portal_data("manager").get("authenticated"):
+        return jsonify({"error": "Unauthorized"}), 401
+    if role == "staff" and not portal_data("staff").get("username"):
+        return jsonify({"error": "Unauthorized"}), 401
+    if role == "supplier" and not portal_data("supplier").get("username"):
+        return jsonify({"error": "Unauthorized"}), 401
+    username = portal_username(role)
     if request.method == "GET":
         return jsonify(profile_payload(role, username))
     data = request.get_json(silent=True) or {}
@@ -1591,11 +1808,12 @@ def api_profile():
 
 @app.route("/api/purchase-requests")
 def get_purchase_requests():
-    role = session.get("role")
+    role = active_portal_role()
     if role == "staff":
         if not staff_api_allowed():
             return jsonify({"error": "Unauthorized"}), 403
-        requests_list = PurchaseRequest.query.filter_by(requested_by=session.get("username")).order_by(PurchaseRequest.id.desc()).all()
+        staff_user = portal_username("staff")
+        requests_list = PurchaseRequest.query.filter_by(requested_by=staff_user).order_by(PurchaseRequest.id.desc()).all()
     elif manager_api_allowed():
         requests_list = PurchaseRequest.query.all()
         requests_list.sort(key=lambda r: (0 if r.status == "Pending" else 1 if r.status == "Approved" else 2, r.id or ""))
@@ -1643,7 +1861,7 @@ def create_purchase_request():
         qty=qty,
         unit=data.get("unit", "pcs"),
         reason=str(data.get("reason", "")).strip(),
-        requested_by=session.get("username", "staff"),
+        requested_by=portal_username("staff") or "staff",
         supplier_name=supplier_name,
         status="Pending",
         date=datetime.now().strftime("%B %d, %Y · %I:%M %p"),
@@ -1655,7 +1873,7 @@ def create_purchase_request():
         "manager",
         "new_purchase_request",
         "New Purchase Request",
-        f"{session.get('username', 'staff')} requested {item_name} ({qty} {record.unit}) from {supplier_name}.",
+        f"{portal_username('staff') or 'staff'} requested {item_name} ({qty} {record.unit}) from {supplier_name}.",
         req_id,
     )
     db.session.commit()
@@ -1699,15 +1917,15 @@ def review_purchase_request():
 
 @app.route("/api/support", methods=["GET", "POST"])
 def api_support():
-    role = session.get("role")
+    role = active_portal_role()
     if role not in {"staff", "supplier"} and not manager_api_allowed():
         return jsonify({"error": "Unauthorized"}), 401
     if request.method == "GET":
         if manager_api_allowed():
             tickets = SupportRequest.query.order_by(SupportRequest.id.desc()).all()
         else:
-            username = session.get("username")
-            tickets = SupportRequest.query.filter_by(username=username).order_by(SupportRequest.id.desc()).all()
+            username = portal_username(role)
+            tickets = SupportRequest.query.filter_by(username=username, role=role).order_by(SupportRequest.id.desc()).all()
         return jsonify([{
             "id": t.id,
             "ticketId": t.ticket_id,
@@ -1730,7 +1948,7 @@ def api_support():
     ticket_id = f"TKT-{datetime.now().strftime('%Y%m%d%H%M')}"
     ticket = SupportRequest(
         ticket_id=ticket_id,
-        username=session.get("username"),
+        username=portal_username(role),
         role=role,
         category=category,
         subject=subject,
@@ -1740,6 +1958,14 @@ def api_support():
     )
     db.session.add(ticket)
     db.session.add(ActivityLog(event="Support Request submitted", item=category, reference=ticket_id, status="Open", time=datetime.now().strftime("%H:%M")))
+    create_notification(
+        "manager",
+        "manager",
+        "support_request",
+        "New Support Request",
+        f"{portal_username(role)} submitted support ticket {ticket_id}: {subject}",
+        ticket_id,
+    )
     db.session.commit()
     return jsonify({"status": "success", "ticketId": ticket_id})
 
@@ -1753,6 +1979,14 @@ def update_support_request():
     if not ticket or status not in {"Open", "In Progress", "Resolved", "Closed"}:
         return jsonify({"error": "Invalid support ticket update."}), 400
     ticket.status = status
+    create_notification(
+        ticket.role,
+        ticket.username,
+        "support_status_updated",
+        "Support Ticket Updated",
+        f"Ticket {ticket.ticket_id} status changed to {status}.",
+        ticket.ticket_id,
+    )
     db.session.commit()
     return jsonify({"status": "success"})
 
@@ -1760,17 +1994,19 @@ def update_support_request():
 def supplier_purchase_orders():
     if not supplier_api_allowed():
         return jsonify({"error": "Supplier access required"}), 403
-    orders = purchase_orders_for_supplier(session.get("username"))
+    orders = purchase_orders_for_supplier(portal_username("supplier"))
     return jsonify([{
         "id": o.id,
         "itemName": o.item_name,
         "qty": o.qty,
         "unit": o.unit,
         "supplier": o.supplier,
+        "supplierId": o.supplier_id or "",
         "total": o.total,
         "status": o.status,
         "type": o.type,
         "date": o.date,
+        "expectedDeliveryDate": o.expected_delivery_date or "—",
         "deliveryId": delivery_id_for_po(o.id),
     } for o in orders])
 
@@ -1781,7 +2017,7 @@ def supplier_respond_po():
     data = request.get_json(silent=True) or {}
     po = PurchaseOrder.query.get(data.get("id"))
     action = str(data.get("action", "")).lower()
-    company = get_supplier_company_for_user(session.get("username"))
+    company = get_supplier_company_for_user(portal_username("supplier"))
     if not po or not supplier_matches_company(po.supplier, company) or action not in {"accept", "reject"}:
         return jsonify({"error": "Purchase order not found or not assigned to your company."}), 404
     po.status = "Accepted" if action == "accept" else "Rejected by Supplier"
@@ -1802,23 +2038,61 @@ def supplier_respond_po():
 def supplier_deliveries():
     if not supplier_api_allowed():
         return jsonify({"error": "Supplier access required"}), 403
-    orders = purchase_orders_for_supplier(session.get("username"))
+    orders = purchase_orders_for_supplier(portal_username("supplier"))
     receipts = {r.po_id: r for r in ReceivingRecord.query.all()}
-    return jsonify([{
-        "deliveryId": receipts[o.id].delivery_id if o.id in receipts else delivery_id_for_po(o.id),
-        "poNumber": o.id,
-        "itemName": o.item_name,
-        "qty": o.qty,
-        "unit": o.unit,
-        "status": receipts[o.id].status if o.id in receipts else o.status,
-        "date": o.date,
-    } for o in orders if o.status in {"Accepted", "In Transit", "Delivered", "Partial", "Waiting for Supplier"}])
+    visible_statuses = {
+        "Accepted", "In Transit", "Delivered", "Partial", "Waiting for Supplier",
+        "Rejected", "Rejected by Supplier",
+    }
+    result = []
+    for o in orders:
+        receipt = receipts.get(o.id)
+        status = receipt.status if receipt else o.status
+        if receipt or o.status in visible_statuses or (status or "").lower() == "rejected":
+            result.append({
+                "deliveryId": receipt.delivery_id if receipt else delivery_id_for_po(o.id),
+                "poNumber": o.id,
+                "itemName": o.item_name,
+                "qty": o.qty,
+                "unit": o.unit,
+                "status": status,
+                "date": receipt.date_received if receipt else o.date,
+                "rejectionReason": receipt.rejection_reason if receipt else "",
+                "resolutionAction": receipt.resolution_action if receipt else "",
+                "resolutionStatus": receipt.resolution_status if receipt else "",
+            })
+    return jsonify(result)
+
+@app.route("/api/supplier/deliveries/resolve", methods=["POST"])
+def supplier_resolve_delivery():
+    if not supplier_api_allowed():
+        return jsonify({"error": "Supplier access required"}), 403
+    data = request.get_json(silent=True) or {}
+    action = str(data.get("action", "")).strip()
+    if action not in {"Redelivery", "Replace Item", "Refund", "Contact Manager"}:
+        return jsonify({"error": "Select a valid resolution action."}), 400
+    receipt = ReceivingRecord.query.filter_by(delivery_id=data.get("deliveryId")).first()
+    company = get_supplier_company_for_user(portal_username("supplier"))
+    if not receipt or not supplier_matches_company(receipt.supplier, company):
+        return jsonify({"error": "Delivery record not found."}), 404
+    receipt.resolution_action = action
+    receipt.resolution_status = "In Progress"
+    create_notification(
+        "manager",
+        "manager",
+        "delivery_resolution",
+        "Supplier Delivery Resolution",
+        f"{company} requested {action} for rejected delivery {receipt.delivery_id}.",
+        receipt.delivery_id,
+    )
+    db.session.commit()
+    return jsonify({"status": "success"})
 
 @app.route("/api/supplier/catalog", methods=["GET", "POST"])
 def supplier_catalog_api():
     if not supplier_api_allowed():
         return jsonify({"error": "Supplier access required"}), 403
-    company = get_supplier_company_for_user(session.get("username"))
+    company = get_supplier_company_for_user(portal_username("supplier"))
     supplier = Supplier.query.filter_by(name=company).first()
     if not supplier:
         return jsonify({"error": "Supplier catalog not found."}), 404
@@ -1923,24 +2197,24 @@ def manager_dashboard():
 def supplier_dashboard():
     if not supplier_api_allowed():
         return jsonify({"error": "Supplier access required"}), 403
-    orders = purchase_orders_for_supplier(session.get("username"))
+    orders = purchase_orders_for_supplier(portal_username("supplier"))
     return jsonify({
         "newOrders": len([o for o in orders if o.status in {"Waiting for Supplier", "Transmitted"}]),
         "acceptedOrders": len([o for o in orders if o.status == "Accepted"]),
         "pendingDeliveries": len([o for o in orders if o.status in {"Accepted", "In Transit"}]),
         "completedDeliveries": len([o for o in orders if o.status in {"Delivered", "Partial"}]),
         "rejectedOrders": len([o for o in orders if "Rejected" in (o.status or "")]),
-        "profile": profile_payload("supplier", session.get("username")),
+        "profile": profile_payload("supplier", portal_username("supplier")),
     })
 
 def current_notification_scope():
-    role = session.get("role")
+    role = active_portal_role()
     if role == "manager" and manager_api_allowed():
         return "manager", "manager"
     if role == "staff" and staff_api_allowed():
-        return "staff", session.get("username", "")
+        return "staff", portal_username("staff") or ""
     if role == "supplier" and supplier_api_allowed():
-        return "supplier", notification_recipient_key("supplier", session.get("username"))
+        return "supplier", notification_recipient_key("supplier", portal_username("supplier"))
     return None, None
 
 @app.route("/api/notifications")
@@ -1996,6 +2270,27 @@ def mark_all_notifications_read():
     db.session.commit()
     return jsonify({"status": "success"})
 
+def seed_supplier_account(company_name, supplier_id, contact_person, email, phone, address, password="Supplier@2026"):
+    if User.query.filter_by(username=company_name, role="supplier").first():
+        return
+    supplier_user = User(
+        username=company_name,
+        password_hash=generate_password_hash(password),
+        role="supplier",
+        password_changed_at=datetime.now(),
+    )
+    db.session.add(supplier_user)
+    db.session.flush()
+    db.session.add(UserProfile(
+        user_id=supplier_user.id,
+        supplier_id=supplier_id,
+        company_name=company_name,
+        contact_person=contact_person,
+        email=email,
+        contact_number=phone,
+        business_address=address,
+    ))
+
 def initialize_app():
     with app.app_context():
         ensure_user_schema()
@@ -2008,31 +2303,24 @@ def initialize_app():
                 role="staff",
                 password_changed_at=None
             ))
-        if not User.query.filter_by(username="supplier").first() and not User.query.filter_by(username="Metro Meats Supply").first():
-            supplier_user = User(
-                username="Metro Meats Supply",
-                password_hash=generate_password_hash("Supplier@2026"),
-                role="supplier",
-                password_changed_at=None
-            )
-            db.session.add(supplier_user)
-            db.session.flush()
-            db.session.add(UserProfile(
-                user_id=supplier_user.id,
-                supplier_id="SUP-0001",
-                company_name="Metro Meats Supply",
-                contact_person="Juan Dela Cruz",
-                email="orders@metromeats.ph",
-                contact_number="+63 917 555 0101",
-                business_address="123 Industrial Ave, Quezon City",
-            ))
-        else:
-            legacy_supplier = User.query.filter_by(username="supplier", role="supplier").first()
-            if legacy_supplier:
-                profile = UserProfile.query.filter_by(user_id=legacy_supplier.id).first()
-                company = profile.company_name if profile and profile.company_name else "Metro Meats Supply"
-                if not User.query.filter_by(username=company).first() or company == "supplier":
-                    legacy_supplier.username = company if company != "supplier" else "Metro Meats Supply"
+        seed_supplier_account(
+            "Metro Meats Supply", "SUP-0001", "Juan Dela Cruz",
+            "orders@metromeats.ph", "+63 917 555 0101", "123 Industrial Ave, Quezon City",
+        )
+        seed_supplier_account(
+            "Fresh Harvest Trading", "SUP-0002", "Maria Santos",
+            "orders@freshharvest.ph", "+63 918 555 0202", "45 Farmers Market Rd, Makati",
+        )
+        seed_supplier_account(
+            "Golden Grain Co.", "SUP-0003", "Pedro Reyes",
+            "orders@goldengrain.ph", "+63 919 555 0303", "88 Grain Terminal, Pasig",
+        )
+        legacy_supplier = User.query.filter_by(username="supplier", role="supplier").first()
+        if legacy_supplier:
+            profile = UserProfile.query.filter_by(user_id=legacy_supplier.id).first()
+            company = profile.company_name if profile and profile.company_name else "Metro Meats Supply"
+            if not User.query.filter_by(username=company).first() or company == "supplier":
+                legacy_supplier.username = company if company != "supplier" else "Metro Meats Supply"
         db.session.commit()
 
 initialize_app()

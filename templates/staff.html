@@ -7,12 +7,15 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='staff-portal.css') }}">
   <script src="https://unpkg.com/html5-qrcode"></script>
+  <script defer src="{{ url_for('static', filename='js/portal-api.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/portal-profile.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/portal-sidebar.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/portal-notifications.js') }}"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
   <script defer src="{{ url_for('static', filename='js/staff-portal.js') }}"></script>
 </head>
-<body data-username="{{ username }}">
+<body data-username="{{ username }}" data-portal-role="staff">
 <div class="staff-app">
   <aside class="staff-sidebar" id="staff-sidebar">
     <div class="staff-brand"><div class="staff-brand-mark">B</div><div class="staff-brand-copy"><strong>Byte Me</strong><span>Inventory Control</span></div></div>
@@ -40,6 +43,8 @@
         </div>
       </div>
 
+      <button class="staff-nav-item" data-title="Support Request" data-screen="support"><i class="ti ti-headset"></i><span>Support Request</span></button>
+
       <div class="staff-nav-group">
         <button class="staff-nav-item group-toggle" data-title="Reports"><i class="ti ti-chart-bar"></i><span>Reports</span><i class="ti ti-chevron-down group-arrow"></i></button>
         <div class="staff-subnav">
@@ -50,9 +55,9 @@
     </nav>
     <div class="staff-sidebar-footer">
       <div class="staff-nav-label">Settings</div>
-      <a class="staff-nav-item" data-title="Profile" href="/profile"><i class="ti ti-user"></i><span>Profile</span></a>
-      <a class="staff-nav-item" data-title="Change Password" href="/change-password"><i class="ti ti-key"></i><span>Change Password</span></a>
-      <a class="staff-nav-item" data-title="Logout" href="/logout"><i class="ti ti-logout"></i><span>Logout</span></a>
+      <a class="staff-nav-item" data-title="Profile" href="/profile?portal=staff"><i class="ti ti-user"></i><span>Profile</span></a>
+      <a class="staff-nav-item" data-title="Change Password" href="/change-password?portal=staff"><i class="ti ti-key"></i><span>Change Password</span></a>
+      <a class="staff-nav-item" data-title="Logout" href="/logout?portal=staff"><i class="ti ti-logout"></i><span>Logout</span></a>
     </div>
   </aside>
   <div class="staff-sidebar-overlay" id="staff-sidebar-overlay"></div>
@@ -98,7 +103,7 @@
       </section>
 
       <section class="staff-screen" id="staff-screen-inventory-list">
-        <div class="staff-toolbar"><div class="staff-search"><i class="ti ti-search"></i><input id="inventory-search" type="search" placeholder="Search item ID or name"></div><select id="inventory-status-filter"><option value="all">All statuses</option><option value="in-stock">In Stock</option><option value="low-stock">Low Stock</option><option value="critical">Critical</option></select></div>
+        <div class="staff-toolbar"><div class="staff-search"><i class="ti ti-search"></i><input id="inventory-search" type="search" placeholder="Search item ID or name"></div><select id="inventory-status-filter"><option value="all">All statuses</option><option value="in-stock">In Stock</option><option value="low-stock">Low Stock</option><option value="critical">Critical</option><option value="out-of-stock">Out of Stock</option></select></div>
         <div class="staff-table-card"><table><thead><tr><th>Item ID</th><th>Item Name</th><th>Category</th><th>Current Stock</th><th>Unit</th><th>Status</th><th>Last Updated</th></tr></thead><tbody id="staff-inventory-tbody"></tbody></table><div class="staff-pagination"><span id="inventory-page-info">Page 1</span><div><button type="button" id="inventory-prev"><i class="ti ti-chevron-left"></i></button><button type="button" id="inventory-next"><i class="ti ti-chevron-right"></i></button></div></div></div>
       </section>
 
@@ -157,7 +162,8 @@
             <div class="delivery-item-row"><div><span>Item Name</span><strong id="verify-item-name">—</strong></div><div><span>Expected Quantity</span><strong id="verify-expected-quantity">—</strong></div></div>
             <div class="verification-fields"><label>Received Quantity<input id="received-quantity" type="number" min="0" step="0.01" required></label><label>Condition<select id="delivery-condition" required><option value="">Select condition</option><option>Good Condition</option><option>Damaged</option><option>Partial Delivery</option></select></label></div>
             <fieldset><legend>Decision</legend><label><input type="radio" name="delivery-decision" value="complete" required> Complete Delivery</label><label><input type="radio" name="delivery-decision" value="partial"> Partial Delivery</label><label><input type="radio" name="delivery-decision" value="reject"> Reject Delivery</label></fieldset>
-            <div class="staff-form-actions"><button type="button" class="staff-btn secondary" id="delivery-cancel">Cancel</button><button type="submit" class="staff-btn primary"><i class="ti ti-check"></i> Confirm Receipt</button></div>
+            <label id="rejection-reason-wrap" hidden>Rejection Reason<textarea id="rejection-reason" rows="2" placeholder="Explain why this delivery is rejected"></textarea></label>
+            <div class="staff-form-actions"><button type="button" class="staff-btn secondary" id="delivery-cancel">Cancel</button><button type="submit" class="staff-btn primary"><i class="ti ti-check"></i> Confirm Delivery</button></div>
           </form>
         </div>
       </section>
@@ -165,6 +171,34 @@
       <section class="staff-screen" id="staff-screen-delivery-history">
         <div class="staff-toolbar"><div class="staff-search"><i class="ti ti-search"></i><input id="history-search" type="search" placeholder="Search delivery, supplier, or PO"></div><select id="history-filter"><option value="all">All statuses</option><option>Delivered</option><option>Partial</option><option>Rejected</option></select><select id="history-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></div>
         <div class="staff-table-card"><table><thead><tr><th>Delivery ID</th><th>Supplier</th><th>Purchase Order</th><th>Status</th><th>Date Received</th><th>Received By</th></tr></thead><tbody id="delivery-history-tbody"></tbody></table></div>
+      </section>
+
+      <section class="staff-screen" id="staff-screen-support">
+        <div class="staff-grid staff-adjustment-layout">
+          <form class="staff-card staff-form-card" id="staff-support-form">
+            <div class="staff-card-header"><div><h2>Submit Support Request</h2><p>Contact Byte Me procurement support</p></div></div>
+            <label>Category
+              <select id="staff-support-category" required>
+                <option value="">Select category</option>
+                <option>Account Issue</option>
+                <option>Password Concern</option>
+                <option>Purchase Order Concern</option>
+                <option>Delivery Concern</option>
+                <option>Other</option>
+              </select>
+            </label>
+            <label>Subject<input id="staff-support-subject" type="text" placeholder="Brief summary of your concern" required></label>
+            <label>Message<textarea id="staff-support-message" rows="5" placeholder="Describe your issue in detail" required></textarea></label>
+            <div class="staff-form-actions">
+              <button type="button" class="staff-btn secondary" id="staff-support-reset">Clear</button>
+              <button type="submit" class="staff-btn primary"><i class="ti ti-send"></i> Submit Request</button>
+            </div>
+          </form>
+          <div class="staff-card">
+            <div class="staff-card-header"><div><h2>My Support Tickets</h2><p>Track status updates from the Manager</p></div></div>
+            <div id="staff-support-ticket-list" class="staff-feed"></div>
+          </div>
+        </div>
       </section>
 
       <section class="staff-screen" id="staff-screen-inventory-reports">

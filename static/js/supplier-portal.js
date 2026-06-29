@@ -360,9 +360,12 @@
   }
 
   function apiFetch(url, options) {
+    if (window.PortalApi && window.PortalApi.fetch) {
+      return window.PortalApi.fetch(url, options);
+    }
     options = options || {};
     var headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
-    return fetch(url, Object.assign({}, options, { headers: headers }))
+    return fetch(url, Object.assign({}, options, { headers: headers, credentials: "same-origin" }))
       .then(function (res) {
         return res.json().catch(function () { return {}; }).then(function (data) {
           if (!res.ok) throw new Error(data.error || "Request failed (" + res.status + ")");
@@ -371,13 +374,12 @@
       });
   }
 
+  function qrPayloadForPo(po) {
+    return JSON.stringify({ deliveryId: po.deliveryId, poId: po.id });
+  }
+
   function loadActivity() {
-    return fetch("/api/activity")
-      .then(function (res) {
-        if (res.status === 401 || res.status === 403) return [];
-        if (!res.ok) return [];
-        return res.json();
-      })
+    return apiFetch("/api/activity")
       .then(function (data) {
         activity = Array.isArray(data) ? data : [];
         return activity;
@@ -701,7 +703,7 @@
       return;
     }
     var canvas = document.createElement("canvas");
-    if (!QR.draw(canvas, po.deliveryId)) {
+    if (!QR.draw(canvas, qrPayloadForPo(po))) {
       showToast("Could not generate QR code.", "error");
       return;
     }
@@ -735,6 +737,9 @@
         unit: d.unit,
         status: d.status,
         date: d.date,
+        rejectionReason: d.rejectionReason || "",
+        resolutionAction: d.resolutionAction || "",
+        resolutionStatus: d.resolutionStatus || "",
         source: "server"
       };
     });
@@ -762,6 +767,7 @@
       var status = (row.status || "").toLowerCase();
       if (filter === "pending") return status.indexOf("transit") !== -1 || status.indexOf("accept") !== -1 || status.indexOf("pending") !== -1 || status.indexOf("preparation") !== -1;
       if (filter === "completed") return status.indexOf("deliver") !== -1 || status.indexOf("partial") !== -1;
+      if (filter === "rejected") return status.indexOf("reject") !== -1;
       if (filter === "generated") return row.source === "local" || status.indexOf("qr") !== -1;
       return true;
     });
@@ -770,6 +776,19 @@
       return;
     }
     tbody.innerHTML = items.map(function (row) {
+      var actions = "";
+      if ((row.status || "").toLowerCase().indexOf("reject") !== -1) {
+        actions = '<div class="staff-table-actions">' +
+          ['Redelivery', 'Replace Item', 'Refund', 'Contact Manager'].map(function (action) {
+            return '<button type="button" class="staff-btn secondary compact resolve-delivery-btn" data-delivery-id="' + escapeHtml(row.deliveryId) + '" data-action="' + escapeHtml(action) + '">' + escapeHtml(action) + '</button>';
+          }).join("") +
+          "</div>";
+        if (row.rejectionReason) {
+          actions = '<span class="staff-badge rejected">' + escapeHtml(row.rejectionReason) + "</span>" + actions;
+        }
+      } else {
+        actions = escapeHtml(row.source === "local" ? "Local QR" : "System");
+      }
       return (
         "<tr>" +
         "<td>" + escapeHtml(row.deliveryId) + "</td>" +
@@ -778,10 +797,27 @@
         "<td>" + escapeHtml(formatQty(row.qty, row.unit)) + "</td>" +
         "<td>" + statusBadge(row.status) + "</td>" +
         "<td>" + escapeHtml(row.date || "—") + "</td>" +
-        "<td>" + escapeHtml(row.source === "local" ? "Local QR" : "System") + "</td>" +
+        "<td>" + actions + "</td>" +
         "</tr>"
       );
     }).join("");
+
+    tbody.querySelectorAll(".resolve-delivery-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        apiFetch("/api/supplier/deliveries/resolve", {
+          method: "POST",
+          body: JSON.stringify({
+            deliveryId: btn.getAttribute("data-delivery-id"),
+            action: btn.getAttribute("data-action"),
+          }),
+        }).then(function () {
+          showToast("Resolution request submitted.");
+          return refreshData();
+        }).catch(function (err) {
+          showToast(err.message || "Could not submit resolution.", "error");
+        });
+      });
+    });
   }
 
   function renderSupportTickets() {

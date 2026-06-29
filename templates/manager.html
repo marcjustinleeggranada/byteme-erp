@@ -6,7 +6,10 @@
   <title>Byte Me — Manager Portal</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='staff-portal.css') }}">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script defer src="{{ url_for('static', filename='js/portal-api.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/portal-profile.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/password-toggle.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/portal-sidebar.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/portal-notifications.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/manager-portal.js') }}"></script>
@@ -46,7 +49,7 @@
     @media (max-width: 760px) { .inventory-split, .summary-stats { grid-template-columns: 1fr; } }
   </style>
 </head>
-<body data-username="{{ username }}" data-is-manager="true">
+<body data-username="{{ username }}" data-is-manager="true" data-portal-role="manager">
 <div class="staff-app">
   <aside class="staff-sidebar" id="staff-sidebar">
     <div class="staff-brand">
@@ -68,7 +71,7 @@
         <div class="staff-subnav">
           <a href="/profile">Profile</a>
           <a href="/change-password">Change Password</a>
-          <a href="/logout">Logout</a>
+          <a href="/logout?portal=manager">Logout</a>
         </div>
       </div>
     </nav>
@@ -351,7 +354,9 @@
         <button type="button" class="staff-btn secondary compact" id="managed-catalog-add" style="margin-top:8px"><i class="ti ti-plus"></i> Add Ingredient</button>
       </div>
       <label id="managed-password-group">Temporary Password
-        <input type="password" id="managed-password" autocomplete="new-password" placeholder="Enter temporary password">
+        <div class="password-field-wrap">
+          <input type="password" id="managed-password" autocomplete="new-password" placeholder="Enter temporary password">
+        </div>
       </label>
     </div>
     <div class="staff-modal-actions">

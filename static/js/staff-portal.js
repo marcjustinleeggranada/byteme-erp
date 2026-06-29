@@ -12,7 +12,8 @@
     "receive-deliveries": { title: "Scan Delivery QR Code", subtitle: "Scan or search to verify incoming stock" },
     "delivery-history": { title: "Delivery History", subtitle: "Completed, partial, and rejected receipts" },
     "inventory-reports": { title: "Inventory Report", subtitle: "Current stock position and reorder risk" },
-    "receiving-reports": { title: "Receiving Report", subtitle: "Completed, partial, and rejected deliveries" }
+    "receiving-reports": { title: "Receiving Report", subtitle: "Completed, partial, and rejected deliveries" },
+    support: { title: "My Support Tickets", subtitle: "Submit and track support requests" }
   };
 
   var inventory = [];
@@ -64,6 +65,9 @@
   }
 
   function apiFetch(url, options) {
+    if (window.PortalApi && window.PortalApi.fetch) {
+      return window.PortalApi.fetch(url, options);
+    }
     options = options || {};
     var headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
     return fetch(url, Object.assign({}, options, { headers: headers }))
@@ -75,10 +79,29 @@
       });
   }
 
+  function parseDeliveryLookup(raw) {
+    var text = String(raw || "").trim();
+    if (!text) return "";
+    if (text.toUpperCase().indexOf("BYTEME:") === 0) text = text.split(":").slice(1).join(":").trim();
+    if (text.charAt(0) === "{") {
+      try {
+        var payload = JSON.parse(text);
+        return String(payload.deliveryId || payload.poId || "").trim();
+      } catch (e) { /* ignore */ }
+    }
+    return text;
+  }
+
+  function stockPriority(status) {
+    var order = { "out-of-stock": 0, critical: 1, "low-stock": 2, "in-stock": 3 };
+    return order[status] != null ? order[status] : 9;
+  }
+
   function getStockStatus(item) {
     var stock = Number(item.stock) || 0;
     var threshold = Number(item.threshold) || 0;
-    if (threshold <= 0) return stock > 0 ? "in-stock" : "low-stock";
+    if (stock <= 0) return "out-of-stock";
+    if (threshold <= 0) return "in-stock";
     if (stock <= threshold * 0.5) return "critical";
     if (stock <= threshold) return "low-stock";
     return "in-stock";
@@ -89,6 +112,7 @@
       "in-stock": "In Stock",
       "low-stock": "Low Stock",
       critical: "Critical",
+      "out-of-stock": "Out of Stock",
       pending: "Pending",
       approved: "Approved",
       delivered: "Delivered",
@@ -233,12 +257,7 @@
   }
 
   function loadActivity() {
-    return fetch("/api/activity")
-      .then(function (res) {
-        if (res.status === 401 || res.status === 403) return [];
-        if (!res.ok) return [];
-        return res.json();
-      })
+    return apiFetch("/api/activity")
       .then(function (data) {
         activity = Array.isArray(data) ? data : [];
         return activity;
@@ -427,6 +446,10 @@
   function renderLowStock() {
     var lowItems = inventory.filter(function (item) {
       return getStockStatus(item) !== "in-stock";
+    }).sort(function (a, b) {
+      var diff = stockPriority(getStockStatus(a)) - stockPriority(getStockStatus(b));
+      if (diff !== 0) return diff;
+      return (a.name || "").localeCompare(b.name || "");
     });
     var criticalCount = lowItems.filter(function (item) {
       return getStockStatus(item) === "critical";
@@ -662,7 +685,8 @@
       loadDeliveries(),
       loadPurchaseRequests(),
       loadSuppliers(),
-      loadActivity()
+      loadActivity(),
+      loadSupportTickets()
     ]).then(renderAll).catch(function (err) {
       showToast(err.message || "Failed to load portal data.", "error");
     });
@@ -869,10 +893,10 @@
       showToast("Enter a Delivery ID or PO number.", "error");
       return;
     }
-    apiFetch("/api/staff/deliveries/" + encodeURIComponent(id.trim()))
+    apiFetch("/api/staff/deliveries/" + encodeURIComponent(parseDeliveryLookup(id)))
       .then(function (detail) {
         showDeliveryDetail(detail);
-        showToast("Delivery details loaded successfully.");
+        showToast("Delivery details loaded. Review and confirm when ready.");
       })
       .catch(function (err) {
         resetDeliveryView();
@@ -915,11 +939,12 @@
           poNumber: currentDelivery.poNumber,
           receivedQuantity: parseFloat($("received-quantity") && $("received-quantity").value) || 0,
           condition: $("delivery-condition") && $("delivery-condition").value,
-          decision: decisionEl && decisionEl.value
+          decision: decisionEl && decisionEl.value,
+          rejectionReason: $("rejection-reason") && $("rejection-reason").value || ""
         };
         apiFetch("/api/staff/deliveries/confirm", { method: "POST", body: JSON.stringify(payload) })
           .then(function (result) {
-            showToast("Delivery " + (result.deliveryStatus || "recorded") + " successfully.");
+            showToast(result.message || ("Delivery " + (result.deliveryStatus || "recorded") + " successfully."));
             resetDeliveryView();
             if (idInput) idInput.value = "";
             return refreshData();
@@ -977,8 +1002,9 @@
         { fps: 10, qrbox: { width: 220, height: 220 } },
         function (decodedText) {
           stopQrScanner();
-          if ($("delivery-id-input")) $("delivery-id-input").value = decodedText.trim();
-          loadDeliveryDetail(decodedText.trim());
+          var lookup = parseDeliveryLookup(decodedText);
+          if ($("delivery-id-input")) $("delivery-id-input").value = lookup;
+          loadDeliveryDetail(lookup);
         },
         function () { /* ignore scan errors */ }
       );
@@ -1033,15 +1059,145 @@
     });
   }
 
+  function downloadSpreadsheet(filename, headers, rows) {
+    var lines = [headers.join("\t")].concat(rows.map(function (row) {
+      return row.map(function (cell) { return String(cell == null ? "" : cell).replace(/\t/g, " "); }).join("\t");
+    }));
+    var blob = new Blob(["\ufeff" + lines.join("\n")], { type: "application/vnd.ms-excel;charset=utf-8" });
+    var link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+  }
+
+  function downloadPdfReport(title, headers, rows, filename) {
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+      showToast("PDF library is loading. Try again in a moment.", "error");
+      return;
+    }
+    var doc = new window.jspdf.jsPDF();
+    doc.setFontSize(14);
+    doc.text(title, 14, 16);
+    if (doc.autoTable) {
+      doc.autoTable({ head: [headers], body: rows, startY: 22, styles: { fontSize: 9 } });
+    }
+    doc.save(filename);
+  }
+
   function setupExportButtons() {
     document.querySelectorAll("[data-export]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var kind = btn.getAttribute("data-export");
-        if (kind && kind.indexOf("pdf") !== -1) {
-          window.print();
-        } else {
-          alert("Export started");
+        var kind = btn.getAttribute("data-export") || "";
+        if (kind === "inventory-excel") {
+          downloadSpreadsheet(
+            "inventory-report.xls",
+            ["Item ID", "Item", "Stock", "Reorder Level", "Unit", "Status"],
+            inventory.map(function (item) {
+              return [item.id, item.name, item.stock, item.threshold, item.unit, getStockStatus(item)];
+            })
+          );
+          showToast("Inventory Excel report downloaded.");
+        } else if (kind === "inventory-pdf") {
+          downloadPdfReport(
+            "Inventory Report",
+            ["Item ID", "Item", "Stock", "Reorder Level", "Status"],
+            inventory.map(function (item) {
+              return [item.id, item.name, item.stock, item.threshold, getStockStatus(item)];
+            }),
+            "inventory-report.pdf"
+          );
+        } else if (kind === "receiving-excel") {
+          downloadSpreadsheet(
+            "receiving-report.xls",
+            ["Delivery ID", "Supplier", "PO", "Item", "Received Qty", "Status", "Date"],
+            deliveries.map(function (d) {
+              return [d.deliveryId, d.supplier, d.poNumber, d.itemName, d.receivedQuantity, d.status, d.dateReceived || d.date];
+            })
+          );
+          showToast("Receiving Excel report downloaded.");
+        } else if (kind === "receiving-pdf") {
+          downloadPdfReport(
+            "Receiving Report",
+            ["Delivery", "Supplier", "PO", "Qty", "Status", "Date"],
+            deliveries.map(function (d) {
+              return [d.deliveryId, d.supplier, d.poNumber, d.receivedQuantity, d.status, d.dateReceived || d.date];
+            }),
+            "receiving-report.pdf"
+          );
         }
+      });
+    });
+  }
+
+  var supportTickets = [];
+
+  function loadSupportTickets() {
+    return apiFetch("/api/support").then(function (data) {
+      supportTickets = Array.isArray(data) ? data : [];
+      renderSupportTickets();
+      return supportTickets;
+    }).catch(function () {
+      supportTickets = [];
+      renderSupportTickets();
+      return supportTickets;
+    });
+  }
+
+  function renderSupportTickets() {
+    var list = $("staff-support-ticket-list");
+    if (!list) return;
+    if (!supportTickets.length) {
+      list.innerHTML = emptyFeed("No support tickets submitted yet.");
+      return;
+    }
+    list.innerHTML = supportTickets.map(function (ticket) {
+      return feedItem(
+        "ti-headset",
+        ticket.subject + " · " + ticket.status,
+        ticket.category + " · " + ticket.ticketId,
+        ticket.date
+      );
+    }).join("");
+  }
+
+  function setupSupportForm() {
+    var form = $("staff-support-form");
+    var resetBtn = $("staff-support-reset");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", function () {
+        if (form) form.reset();
+      });
+    }
+    if (!form) return;
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var payload = {
+        category: $("staff-support-category") && $("staff-support-category").value,
+        subject: $("staff-support-subject") && $("staff-support-subject").value.trim(),
+        message: $("staff-support-message") && $("staff-support-message").value.trim(),
+      };
+      apiFetch("/api/support", { method: "POST", body: JSON.stringify(payload) })
+        .then(function () {
+          showToast("Support request submitted.");
+          form.reset();
+          return loadSupportTickets();
+        })
+        .catch(function (err) {
+          showToast(err.message || "Could not submit support request.", "error");
+        });
+    });
+  }
+
+  function setupRejectionReasonToggle() {
+    var form = $("delivery-verification");
+    if (!form) return;
+    var reasonWrap = $("rejection-reason-wrap");
+    form.querySelectorAll('input[name="delivery-decision"]').forEach(function (input) {
+      input.addEventListener("change", function () {
+        if (reasonWrap) reasonWrap.hidden = input.value !== "reject";
       });
     });
   }
@@ -1058,6 +1214,8 @@
     setupInventoryControls();
     setupHistoryControls();
     setupExportButtons();
+    setupSupportForm();
+    setupRejectionReasonToggle();
     window.PortalSync = { refresh: refreshData };
     refreshData();
     startLiveSync();

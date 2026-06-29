@@ -70,6 +70,9 @@
   }
 
   function apiFetch(url, options) {
+    if (window.PortalApi && window.PortalApi.fetch) {
+      return window.PortalApi.fetch(url, options);
+    }
     options = options || {};
     var headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
     return fetch(url, Object.assign({}, options, { headers: headers, credentials: "same-origin" }))
@@ -79,6 +82,11 @@
           return data;
         });
       });
+  }
+
+  function stockPriority(status) {
+    var order = { "out-of-stock": 0, critical: 1, "low-stock": 2, "in-stock": 3 };
+    return order[status] != null ? order[status] : 9;
   }
 
   function getStockStatus(item) {
@@ -290,11 +298,7 @@
   }
 
   function loadActivity() {
-    return fetch("/api/activity", { credentials: "same-origin" })
-      .then(function (res) {
-        if (!res.ok) return [];
-        return res.json();
-      })
+    return apiFetch("/api/activity")
       .then(function (data) {
         activity = Array.isArray(data) ? data : [];
         return activity;
@@ -430,6 +434,10 @@
       var status = getStockStatus(item);
       var matchesStatus = statusFilter === "all" || status === statusFilter;
       return matchesQuery && matchesStatus && matchesSupplier;
+    }).sort(function (a, b) {
+      var diff = stockPriority(getStockStatus(a)) - stockPriority(getStockStatus(b));
+      if (diff !== 0) return diff;
+      return (a.name || "").localeCompare(b.name || "");
     });
   }
 
@@ -824,6 +832,7 @@
     if (role === "supplier") renderCatalogRows([{ itemName: "", price: "", unit: "kg", threshold: 10 }]);
     $("user-modal-title").textContent = role === "supplier" ? "Register Supplier" : "Create Inventory Staff Account";
     modal.hidden = false;
+    if (window.PasswordToggle) window.PasswordToggle.init(modal);
   }
 
   function renderCatalogRows(rows) {
