@@ -209,15 +209,16 @@
   }
 
   function setupMobileNav() {
-    var menuBtn = $("staff-menu-button");
-    var overlay = $("staff-sidebar-overlay");
-    if (menuBtn) {
-      menuBtn.addEventListener("click", function () {
-        if (document.body.classList.contains("mobile-sidebar-open")) closeMobileSidebar();
-        else openMobileSidebar();
-      });
+    if (window.PortalSidebar) {
+      window.PortalSidebar.setup("staff-menu-button", "staff-sidebar-overlay");
     }
-    if (overlay) overlay.addEventListener("click", closeMobileSidebar);
+  }
+
+  function startLiveSync() {
+    if (inventoryPollTimer) clearInterval(inventoryPollTimer);
+    inventoryPollTimer = setInterval(function () {
+      refreshData().catch(function () { /* ignore transient sync errors */ });
+    }, 8000);
   }
 
   function setupAvatar() {
@@ -500,7 +501,7 @@
     var tbody = $("purchase-requests-tbody");
     if (!tbody) return;
     if (!purchaseRequests.length) {
-      tbody.innerHTML = emptyRow(8, "No purchase requests submitted yet.");
+      tbody.innerHTML = emptyRow(9, "No purchase requests submitted yet.");
       return;
     }
     tbody.innerHTML = purchaseRequests.map(function (req) {
@@ -516,6 +517,7 @@
         "<tr>" +
         "<td>" + escapeHtml(req.id) + "</td>" +
         "<td>" + escapeHtml(req.itemName) + "</td>" +
+        "<td>" + escapeHtml(req.supplierName || "—") + "</td>" +
         "<td>" + escapeHtml(formatQty(req.qty, req.unit)) + "</td>" +
         "<td>" + escapeHtml(req.requestedBy || "—") + "</td>" +
         "<td>" + escapeHtml(req.reason || "—") + "</td>" +
@@ -694,13 +696,7 @@
   }
 
   function startInventoryPolling() {
-    if (inventoryPollTimer) clearInterval(inventoryPollTimer);
-    inventoryPollTimer = setInterval(function () {
-      Promise.all([loadDashboard(), loadInventory(), loadActivity()]).then(function () {
-        renderDashboard();
-        renderInventoryList();
-      }).catch(function () { /* ignore transient poll errors */ });
-    }, 15000);
+    startLiveSync();
   }
 
   function refreshData() {
@@ -1168,6 +1164,7 @@
     setupManualPoForm();
     setupUserModal();
     setupDelegatedActions();
+    window.PortalSync = { refresh: refreshData };
     refreshData();
     startInventoryPolling();
   }

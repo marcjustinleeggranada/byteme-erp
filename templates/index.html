@@ -13,7 +13,7 @@
 <div class="login-page-shell">
 <main class="login-main">
 
-<div class="login-container">
+<div class="login-container" id="login-container">
 
     <div class="login-brand">
         <div class="login-brand-icon"><i class="fa-solid fa-utensils"></i></div>
@@ -26,52 +26,48 @@
     <div class="login-rule"></div>
     <p class="login-system-name">Procurement &amp; Inventory Management System</p>
 
-    <form action="/login" method="POST" class="login-form">
+    <form action="/login" method="POST" class="login-form" id="login-form">
         <section id="role-step" class="login-step">
-            <div class="role-options" role="radiogroup" aria-label="Account type">
-            <label class="role-card">
-                <input type="radio" name="role" value="manager" required>
-                <span class="role-card-content">
-                    <i class="fa-solid fa-user-tie"></i>
-                    <span>Manager</span>
-                </span>
-            </label>
-            <label class="role-card">
-                <input type="radio" name="role" value="staff" required>
-                <span class="role-card-content">
-                    <i class="fa-solid fa-id-badge"></i>
-                    <span>Inventory Staff</span>
-                </span>
-            </label>
-            <label class="role-card">
-                <input type="radio" name="role" value="supplier" required>
-                <span class="role-card-content">
-                    <i class="fa-solid fa-truck-field"></i>
-                    <span>Supplier</span>
-                </span>
-            </label>
+            <h2 class="login-role-heading">Select your role to sign in</h2>
+            <div class="role-cards-grid">
+                <div class="role-panel">
+                    <div class="role-panel-icon"><i class="fa-solid fa-user-tie"></i></div>
+                    <strong>Manager</strong>
+                    <button type="button" class="role-login-btn" data-role="manager">Login as Manager <i class="fa-solid fa-arrow-right"></i></button>
+                </div>
+                <div class="role-panel">
+                    <div class="role-panel-icon"><i class="fa-solid fa-box"></i></div>
+                    <strong>Inventory Staff</strong>
+                    <button type="button" class="role-login-btn" data-role="staff">Login as Staff <i class="fa-solid fa-arrow-right"></i></button>
+                </div>
+                <div class="role-panel">
+                    <div class="role-panel-icon"><i class="fa-solid fa-truck"></i></div>
+                    <strong>Supplier</strong>
+                    <button type="button" class="role-login-btn" data-role="supplier">Login as Supplier <i class="fa-solid fa-arrow-right"></i></button>
+                </div>
             </div>
         </section>
 
         <section id="credentials-step" class="login-step" hidden>
+            <input type="hidden" name="role" id="login-role-input" value="">
             <button type="button" id="back-to-roles" class="step-back">
                 <i class="fa-solid fa-arrow-left"></i> Change account type
             </button>
-            <p id="selected-role-label" class="selected-role-label"></p>
+            <h2 id="selected-role-label" class="selected-role-label">Sign In</h2>
 
-        <div class="form-group">
-            <div class="input-wrapper">
-                <i class="fa-solid fa-user"></i>
-                <input type="text" name="username" placeholder="Username" autocomplete="username" required>
+            <div class="form-group">
+                <div class="input-wrapper">
+                    <i class="fa-solid fa-user"></i>
+                    <input type="text" name="username" placeholder="Username" autocomplete="username" required>
+                </div>
             </div>
-        </div>
 
-        <div class="form-group">
-            <div class="input-wrapper">
-                <i class="fa-solid fa-lock"></i>
-                <input type="password" name="password" placeholder="Password" required>
+            <div class="form-group">
+                <div class="input-wrapper">
+                    <i class="fa-solid fa-lock"></i>
+                    <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+                </div>
             </div>
-        </div>
 
             <button type="submit" class="submit-btn">Sign In</button>
         </section>
@@ -82,11 +78,13 @@
 
 <footer class="login-footer">
     <nav class="login-footer-links" aria-label="Login page information">
-        <button type="button" data-info-modal="about-us">About Us</button>
+        <button type="button" data-info-modal="about-us"><i class="fa-solid fa-circle-info"></i> About Us</button>
         <span aria-hidden="true">|</span>
-        <button type="button" data-info-modal="contact-support">Contact Support</button>
+        <button type="button" data-info-modal="terms">Terms and Conditions</button>
+        <span aria-hidden="true">|</span>
+        <button type="button" data-info-modal="contact-support"><i class="fa-solid fa-headset"></i> Contact Support</button>
     </nav>
-    <p class="login-footer-copyright">&copy; Byte Me Restaurant</p>
+    <p class="login-footer-copyright">&copy; 2026 Byte Me Restaurant. All rights reserved.</p>
 </footer>
 </div>
 
@@ -106,6 +104,10 @@
     <p>Byte Me Restaurant ERP is a cloud-based Procurement and Inventory Management System designed to streamline inventory tracking, supplier coordination, procurement processes, and delivery management.</p>
 </template>
 
+<template id="terms-content">
+    <p>By using this system you agree to follow Byte Me Restaurant procurement policies, protect account credentials, and use inventory and supplier data only for authorized restaurant operations.</p>
+</template>
+
 <template id="contact-support-content">
     <p class="login-modal-lead">Need Assistance?</p>
     <dl class="login-contact-list">
@@ -115,27 +117,39 @@
     </dl>
 </template>
 
+<script src="{{ url_for('static', filename='js/password-toggle.js') }}"></script>
 <script>
     const roleStep = document.getElementById("role-step");
     const credentialsStep = document.getElementById("credentials-step");
+    const loginContainer = document.getElementById("login-container");
     const backButton = document.getElementById("back-to-roles");
     const selectedRoleLabel = document.getElementById("selected-role-label");
-    document.querySelectorAll('input[name="role"]').forEach((input) => {
-        input.addEventListener("change", () => {
-            const roleName = input.value === "staff" ? "Inventory Staff" : input.value.charAt(0).toUpperCase() + input.value.slice(1);
-            selectedRoleLabel.textContent = roleName + " Sign In";
+    const roleInput = document.getElementById("login-role-input");
+    const roleLabels = { manager: "Manager", staff: "Inventory Staff", supplier: "Supplier" };
+
+    document.querySelectorAll(".role-login-btn").forEach(function (button) {
+        button.addEventListener("click", function () {
+            const role = button.getAttribute("data-role");
+            roleInput.value = role;
+            selectedRoleLabel.textContent = roleLabels[role] + " Sign In";
+            loginContainer.classList.add("credentials-step");
             roleStep.hidden = true;
             credentialsStep.hidden = false;
             credentialsStep.querySelector('input[name="username"]').focus();
+            if (window.PasswordToggle) window.PasswordToggle.init(credentialsStep);
         });
     });
-    backButton.addEventListener("click", () => {
+
+    backButton.addEventListener("click", function () {
         credentialsStep.hidden = true;
         roleStep.hidden = false;
+        loginContainer.classList.remove("credentials-step");
+        roleInput.value = "";
     });
 
     const modalContent = {
         "about-us": { title: "About Us", template: "about-us-content" },
+        "terms": { title: "Terms and Conditions", template: "terms-content" },
         "contact-support": { title: "Contact Support", template: "contact-support-content" },
     };
     const infoModal = document.getElementById("login-info-modal");
@@ -159,13 +173,13 @@
         document.body.classList.remove("modal-open");
         if (modalTrigger) modalTrigger.focus();
     }
-    document.querySelectorAll("[data-info-modal]").forEach((button) => {
-        button.addEventListener("click", () => openInfoModal(button.dataset.infoModal, button));
+    document.querySelectorAll("[data-info-modal]").forEach(function (button) {
+        button.addEventListener("click", function () { openInfoModal(button.dataset.infoModal, button); });
     });
     modalCloseButton.addEventListener("click", closeInfoModal);
     modalXButton.addEventListener("click", closeInfoModal);
-    infoModal.addEventListener("click", (e) => { if (e.target === infoModal) closeInfoModal(); });
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !infoModal.hidden) closeInfoModal(); });
+    infoModal.addEventListener("click", function (e) { if (e.target === infoModal) closeInfoModal(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !infoModal.hidden) closeInfoModal(); });
 </script>
 
 </body>

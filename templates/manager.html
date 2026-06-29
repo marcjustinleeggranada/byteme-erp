@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='staff-portal.css') }}">
   <script defer src="{{ url_for('static', filename='js/portal-profile.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/portal-sidebar.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/portal-notifications.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/manager-portal.js') }}"></script>
   <style>
     .staff-kpi-grid.eight { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
@@ -90,6 +92,13 @@
         </div>
       </div>
       <div class="staff-user">
+        <div class="portal-notifications-wrap">
+          <button type="button" class="portal-notification-button" id="portal-notification-button" aria-label="Notifications"><i class="ti ti-bell"></i><span id="portal-notification-count" hidden>0</span></button>
+          <div class="portal-notification-panel" id="portal-notification-panel" hidden>
+            <div class="portal-notification-header"><strong>Notifications</strong><button type="button" id="portal-notification-mark-all">Mark all as read</button></div>
+            <div id="portal-notification-list" class="portal-notification-list"></div>
+          </div>
+        </div>
         <div class="staff-user-copy"><strong id="portal-user-name">{{ username }}</strong><span>Manager</span></div>
         <div class="staff-avatar" id="portal-user-avatar">MG</div>
       </div>
@@ -224,7 +233,7 @@
         </div>
         <div class="staff-table-card">
           <table>
-            <thead><tr><th>Request ID</th><th>Item</th><th>Qty</th><th>Requested By</th><th>Reason</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Request ID</th><th>Item</th><th>Supplier</th><th>Qty</th><th>Requested By</th><th>Reason</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="purchase-requests-tbody"></tbody>
           </table>
         </div>

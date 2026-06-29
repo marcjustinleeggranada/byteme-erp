@@ -494,15 +494,15 @@
   }
 
   function setupMobileNav() {
-    var menuBtn = $("supplier-menu-button");
-    var overlay = $("supplier-sidebar-overlay");
-    if (menuBtn) {
-      menuBtn.addEventListener("click", function () {
-        if (document.body.classList.contains("mobile-sidebar-open")) closeMobileSidebar();
-        else openMobileSidebar();
-      });
+    if (window.PortalSidebar) {
+      window.PortalSidebar.setup("supplier-menu-button", "supplier-sidebar-overlay");
     }
-    if (overlay) overlay.addEventListener("click", closeMobileSidebar);
+  }
+
+  function startLiveSync() {
+    setInterval(function () {
+      refreshData().catch(function () { /* ignore transient sync errors */ });
+    }, 8000);
   }
 
   function showConfirmModal(title, message, onConfirm) {
@@ -1049,7 +1049,9 @@
     setupQrGenerator();
     setupSupportForm();
     setupCatalogPricing();
+    window.PortalSync = { refresh: refreshData };
     refreshData();
+    startLiveSync();
   }
 
   if (document.readyState === "loading") {

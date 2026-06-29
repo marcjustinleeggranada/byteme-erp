@@ -19,6 +19,7 @@
   var adjustments = [];
   var deliveries = [];
   var purchaseRequests = [];
+  var suppliers = [];
   var activity = [];
   var inventoryPage = 1;
   var currentDelivery = null;
@@ -199,15 +200,15 @@
   }
 
   function setupMobileNav() {
-    var menuBtn = $("staff-menu-button");
-    var overlay = $("staff-sidebar-overlay");
-    if (menuBtn) {
-      menuBtn.addEventListener("click", function () {
-        if (document.body.classList.contains("mobile-sidebar-open")) closeMobileSidebar();
-        else openMobileSidebar();
-      });
+    if (window.PortalSidebar) {
+      window.PortalSidebar.setup("staff-menu-button", "staff-sidebar-overlay");
     }
-    if (overlay) overlay.addEventListener("click", closeMobileSidebar);
+  }
+
+  function startLiveSync() {
+    setInterval(function () {
+      refreshData().catch(function () { /* ignore transient sync errors */ });
+    }, 8000);
   }
 
   function loadInventory() {
@@ -246,6 +247,23 @@
         activity = [];
         return activity;
       });
+  }
+
+  function loadSuppliers() {
+    return apiFetch("/api/suppliers").then(function (data) {
+      suppliers = Array.isArray(data) ? data : [];
+      return suppliers;
+    });
+  }
+
+  function populateSupplierSelect() {
+    var select = $("pr-supplier");
+    if (!select) return;
+    var current = select.value;
+    select.innerHTML = '<option value="">Select supplier</option>' + suppliers.map(function (supplier) {
+      return '<option value="' + escapeHtml(supplier.name) + '">' + escapeHtml(supplier.name) + "</option>";
+    }).join("");
+    if (current) select.value = current;
   }
 
   function loadPurchaseRequests() {
@@ -594,7 +612,7 @@
     if (!select) return;
     var current = select.value;
     select.innerHTML = '<option value="">Select item</option>' + inventory.map(function (item) {
-      return '<option value="' + item.id + '" data-unit="' + escapeHtml(item.unit || "pcs") + '" data-reorder-qty="' + escapeHtml(item.reorderQty || "") + '">' + escapeHtml(item.name) + "</option>";
+      return '<option value="' + item.id + '" data-unit="' + escapeHtml(item.unit || "pcs") + '" data-reorder-qty="' + escapeHtml(item.reorderQty || "") + '" data-supplier="' + escapeHtml(item.supplier || "") + '">' + escapeHtml(item.name) + "</option>";
     }).join("");
     if (current) select.value = current;
   }
@@ -612,6 +630,7 @@
         "<tr>" +
         "<td>" + escapeHtml(r.id) + "</td>" +
         "<td>" + escapeHtml(r.itemName) + "</td>" +
+        "<td>" + escapeHtml(r.supplierName || "—") + "</td>" +
         "<td>" + escapeHtml(formatQty(r.qty, r.unit)) + "</td>" +
         "<td>" + statusBadge(badgeStatus, r.status) + "</td>" +
         "<td>" + escapeHtml(r.date || "—") + "</td>" +
@@ -628,6 +647,7 @@
     renderAdjustmentItemSelect();
     renderAdjustmentHistory();
     renderPurchaseRequestItemSelect();
+    populateSupplierSelect();
     renderPurchaseRequests();
     renderPendingDeliveries();
     renderDeliveryHistory();
@@ -641,6 +661,7 @@
       loadAdjustments(),
       loadDeliveries(),
       loadPurchaseRequests(),
+      loadSuppliers(),
       loadActivity()
     ]).then(renderAll).catch(function (err) {
       showToast(err.message || "Failed to load portal data.", "error");
@@ -664,6 +685,9 @@
           var reorderQty = option.getAttribute("data-reorder-qty");
           qtyInput.value = reorderQty || "";
         }
+        var supplierSelect = $("pr-supplier");
+        var supplierName = option ? option.getAttribute("data-supplier") : "";
+        if (supplierSelect && supplierName) supplierSelect.value = supplierName;
       });
     }
 
@@ -684,10 +708,15 @@
         }
         var payload = {
           itemName: item.name,
+          supplierName: ($("pr-supplier") && $("pr-supplier").value || "").trim(),
           qty: parseFloat($("pr-qty") && $("pr-qty").value) || 0,
           unit: ($("pr-unit") && $("pr-unit").value || "pcs").trim() || "pcs",
           reason: ($("pr-reason") && $("pr-reason").value || "").trim()
         };
+        if (!payload.supplierName) {
+          showToast("Select a supplier for this request.", "error");
+          return;
+        }
         if (!payload.qty || payload.qty <= 0 || !payload.reason) {
           showToast("Enter quantity and reason.", "error");
           return;
@@ -843,6 +872,7 @@
     apiFetch("/api/staff/deliveries/" + encodeURIComponent(id.trim()))
       .then(function (detail) {
         showDeliveryDetail(detail);
+        showToast("Delivery details loaded successfully.");
       })
       .catch(function (err) {
         resetDeliveryView();
@@ -1028,7 +1058,9 @@
     setupInventoryControls();
     setupHistoryControls();
     setupExportButtons();
+    window.PortalSync = { refresh: refreshData };
     refreshData();
+    startLiveSync();
   }
 
   if (document.readyState === "loading") {

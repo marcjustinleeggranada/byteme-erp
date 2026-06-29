@@ -8,6 +8,8 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='staff-portal.css') }}">
   <script src="https://unpkg.com/html5-qrcode"></script>
   <script defer src="{{ url_for('static', filename='js/portal-profile.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/portal-sidebar.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/portal-notifications.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/staff-portal.js') }}"></script>
 </head>
 <body data-username="{{ username }}">
@@ -64,7 +66,16 @@
     {% endif %}
     <header class="staff-topbar">
       <div class="staff-title-wrap"><button class="staff-menu-button" id="staff-menu-button" aria-label="Toggle sidebar"><i class="ti ti-menu-2"></i></button><div><h1 id="staff-page-title">Dashboard Overview</h1><p id="staff-page-subtitle">Inventory operations and receiving activity</p></div></div>
-      <div class="staff-user"><div class="staff-user-copy"><strong id="portal-user-name">{{ username }}</strong><span>Inventory Staff</span></div><div class="staff-avatar" id="portal-user-avatar">IS</div></div>
+      <div class="staff-topbar-actions">
+        <div class="portal-notifications-wrap">
+          <button type="button" class="portal-notification-button" id="portal-notification-button" aria-label="Notifications"><i class="ti ti-bell"></i><span id="portal-notification-count" hidden>0</span></button>
+          <div class="portal-notification-panel" id="portal-notification-panel" hidden>
+            <div class="portal-notification-header"><strong>Notifications</strong><button type="button" id="portal-notification-mark-all">Mark all as read</button></div>
+            <div id="portal-notification-list" class="portal-notification-list"></div>
+          </div>
+        </div>
+        <div class="staff-user"><div class="staff-user-copy"><strong id="portal-user-name">{{ username }}</strong><span>Inventory Staff</span></div><div class="staff-avatar" id="portal-user-avatar">IS</div></div>
+      </div>
     </header>
 
     <div class="staff-content">
@@ -115,6 +126,7 @@
           <form class="staff-card staff-form-card" id="purchase-request-form">
             <div class="staff-card-header"><div><h2>Submit Purchase Request</h2><p>Request restock for inventory items</p></div></div>
             <label>Item Name<select id="pr-item" required></select></label>
+            <label>Supplier<select id="pr-supplier" required><option value="">Select supplier</option></select></label>
             <div class="staff-form-row">
               <label>Quantity<input id="pr-qty" type="number" step="0.01" min="0.01" placeholder="Enter quantity" required></label>
               <label>Unit<input id="pr-unit" type="text" placeholder="e.g. pcs, kg, L" value="pcs"></label>
@@ -125,7 +137,7 @@
           <div class="staff-card">
             <div class="staff-card-header"><div><h2>My Purchase Requests</h2><p>Track status of your submitted requests</p></div></div>
             <div class="staff-table-card" style="border:0;box-shadow:none">
-              <table><thead><tr><th>Request ID</th><th>Item</th><th>Qty</th><th>Status</th><th>Date</th><th>Review Note</th></tr></thead><tbody id="purchase-requests-tbody"></tbody></table>
+              <table><thead><tr><th>Request ID</th><th>Item</th><th>Supplier</th><th>Qty</th><th>Status</th><th>Date</th><th>Review Note</th></tr></thead><tbody id="purchase-requests-tbody"></tbody></table>
             </div>
           </div>
         </div>

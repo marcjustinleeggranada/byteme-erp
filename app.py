@@ -180,9 +180,21 @@ class PurchaseRequest(db.Model):
     unit = db.Column(db.String(20))
     reason = db.Column(db.Text)
     requested_by = db.Column(db.String(120), nullable=False)
+    supplier_name = db.Column(db.String(100))
     status = db.Column(db.String(50), default="Pending")
     date = db.Column(db.String(80))
     review_note = db.Column(db.Text)
+
+class Notification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    recipient_role = db.Column(db.String(50), nullable=False)
+    recipient_key = db.Column(db.String(120), nullable=False)
+    event_type = db.Column(db.String(50), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    reference = db.Column(db.String(100), default="")
+    is_read = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.now)
 
 class SupportRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -208,6 +220,60 @@ def get_supplier_price(supplier_name, item_name):
             pass
     return 150.0
 
+def normalize_supplier_name(value):
+    return str(value or "").strip().lower()
+
+def supplier_matches_company(order_supplier, company):
+    if not company:
+        return False
+    left = normalize_supplier_name(order_supplier)
+    right = normalize_supplier_name(company)
+    return bool(left) and left == right
+
+def purchase_orders_for_supplier(username):
+    company = get_supplier_company_for_user(username)
+    if not company:
+        return []
+    return [
+        order for order in PurchaseOrder.query.order_by(PurchaseOrder.id.desc()).all()
+        if supplier_matches_company(order.supplier, company)
+    ]
+
+def find_order_for_delivery_lookup(delivery_id):
+    lookup = str(delivery_id or "").strip()
+    if not lookup:
+        return None
+    receipt = ReceivingRecord.query.filter(
+        db.func.lower(ReceivingRecord.delivery_id) == lookup.lower()
+    ).first()
+    if receipt:
+        return PurchaseOrder.query.get(receipt.po_id)
+    for order in PurchaseOrder.query.all():
+        if delivery_id_for_po(order.id).lower() == lookup.lower():
+            return order
+        if str(order.id).lower() == lookup.lower():
+            return order
+    return None
+
+def notification_recipient_key(role, username=None):
+    if role == "manager":
+        return "manager"
+    if role == "supplier":
+        return get_supplier_company_for_user(username) or username or ""
+    return username or ""
+
+def create_notification(recipient_role, recipient_key, event_type, title, message, reference=""):
+    if not recipient_key:
+        return
+    db.session.add(Notification(
+        recipient_role=recipient_role,
+        recipient_key=recipient_key,
+        event_type=event_type,
+        title=title,
+        message=message,
+        reference=reference or "",
+    ))
+
 def create_po_from_purchase_request(pr_record):
     """Create and send a purchase order when a purchase request is approved."""
     existing = PurchaseOrder.query.filter_by(source_pr_id=pr_record.id).first()
@@ -215,7 +281,7 @@ def create_po_from_purchase_request(pr_record):
         return existing
 
     item = Inventory.query.filter(db.func.lower(Inventory.name) == pr_record.item_name.lower()).first()
-    supplier = item.supplier_name if item and item.supplier_name else "Default Supplier"
+    supplier = pr_record.supplier_name or (item.supplier_name if item and item.supplier_name else "Default Supplier")
     unit = pr_record.unit or (item.unit if item else "pcs")
     price = get_supplier_price(supplier, pr_record.item_name)
     po_id = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -240,6 +306,22 @@ def create_po_from_purchase_request(pr_record):
         status="Waiting for Supplier",
         time=datetime.now().strftime("%H:%M"),
     ))
+    create_notification(
+        "supplier",
+        supplier,
+        "new_purchase_order",
+        "New Purchase Order",
+        f"PO {po_id} for {pr_record.item_name} ({pr_record.qty} {unit}) is waiting for your response.",
+        po_id,
+    )
+    create_notification(
+        "manager",
+        "manager",
+        "purchase_order_sent",
+        "Purchase Order Sent",
+        f"PO {po_id} was sent to {supplier} after approving {pr_record.id}.",
+        po_id,
+    )
     return po
 
 def sync_low_stock_alerts():
@@ -271,6 +353,7 @@ def check_and_auto_purchase_request(item_id, requested_by=None):
         unit=item.unit if item.unit else "pcs",
         reason=f"Auto-generated: stock ({item.stock} {item.unit or 'units'}) at or below threshold ({item.threshold}).",
         requested_by=requested_by or "staff",
+        supplier_name=item.supplier_name or "",
         status="Pending",
         date=datetime.now().strftime("%B %d, %Y · %I:%M %p"),
     )
@@ -757,6 +840,9 @@ def ensure_user_schema():
         po_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(purchase_order)"))}
         if "source_pr_id" not in po_columns:
             db.session.execute(text("ALTER TABLE purchase_order ADD COLUMN source_pr_id VARCHAR(50)"))
+        pr_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(purchase_request)"))}
+        if "supplier_name" not in pr_columns:
+            db.session.execute(text("ALTER TABLE purchase_request ADD COLUMN supplier_name VARCHAR(100)"))
     else:
         columns = {
             row[0]
@@ -776,6 +862,14 @@ def ensure_user_schema():
         }
         if "source_pr_id" not in po_columns:
             db.session.execute(text("ALTER TABLE purchase_order ADD COLUMN source_pr_id VARCHAR(50)"))
+        pr_columns = {
+            row[0]
+            for row in db.session.execute(text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'purchase_request'"
+            ))
+        }
+        if "supplier_name" not in pr_columns:
+            db.session.execute(text("ALTER TABLE purchase_request ADD COLUMN supplier_name VARCHAR(100)"))
     db.session.commit()
     for username, initial_password in FIXED_MANAGER_ACCOUNTS.items():
         if not ManagerCredential.query.filter_by(username=username).first():
@@ -1124,6 +1218,14 @@ def approve_po():
     if po:
         po.status = "Waiting for Supplier"
         db.session.add(ActivityLog(event="Purchase Order Sent to Supplier", item=po.item_name, reference=po.id, status="Waiting for Supplier", time=datetime.now().strftime("%H:%M")))
+        create_notification(
+            "supplier",
+            po.supplier or "",
+            "new_purchase_order",
+            "New Purchase Order",
+            f"PO {po.id} for {po.item_name} is waiting for your response.",
+            po.id,
+        )
         db.session.commit()
 
     return jsonify({"status":"success"})
@@ -1320,10 +1422,12 @@ def staff_deliveries():
 def staff_delivery_detail(delivery_id):
     if not staff_api_allowed():
         return jsonify({"error": "Inventory Staff access required"}), 403
-    order = next((po for po in PurchaseOrder.query.all() if delivery_id_for_po(po.id).lower() == delivery_id.lower() or po.id.lower() == delivery_id.lower()), None)
+    order = find_order_for_delivery_lookup(delivery_id)
     if not order:
         return jsonify({"error": "Delivery ID was not found."}), 404
     existing = ReceivingRecord.query.filter_by(po_id=order.id).first()
+    pending_statuses = {"Transmitted", "Waiting for Supplier", "Accepted", "In Transit"}
+    status = existing.status if existing else (order.status if order.status in pending_statuses else order.status or "Pending")
     return jsonify({
         "deliveryId": existing.delivery_id if existing else delivery_id_for_po(order.id),
         "poNumber": order.id,
@@ -1331,8 +1435,9 @@ def staff_delivery_detail(delivery_id):
         "itemName": order.item_name,
         "expectedQuantity": order.qty,
         "unit": order.unit,
-        "status": existing.status if existing else ("Pending" if order.status == "Transmitted" else order.status),
-        "alreadyReceived": bool(existing)
+        "status": status,
+        "alreadyReceived": bool(existing),
+        "scanSuccess": True,
     })
 
 @app.route("/api/staff/deliveries/confirm", methods=["POST"])
@@ -1358,6 +1463,7 @@ def confirm_staff_delivery():
         return jsonify({"error": "Enter the quantity received."}), 400
 
     status = status_map[decision]
+    item = None
     if decision == "reject":
         received_quantity = 0
     else:
@@ -1383,8 +1489,24 @@ def confirm_staff_delivery():
     db.session.add(receipt)
     db.session.add(DeliveryRecord(qr_value=delivery_id, po_id=order.id, status=status, time=datetime.now().strftime("%H:%M")))
     db.session.add(ActivityLog(event="Delivery Received" if status != "Rejected" else "Delivery Rejected", item=order.item_name, reference=delivery_id, status=status, time=datetime.now().strftime("%H:%M")))
+    create_notification(
+        "manager",
+        "manager",
+        "delivery_verified",
+        "Delivery Verified",
+        f"{session.get('username', 'staff')} recorded {status} for {order.item_name} ({delivery_id}).",
+        delivery_id,
+    )
+    create_notification(
+        "supplier",
+        order.supplier or "",
+        "delivery_verified",
+        "Delivery Verified",
+        f"Delivery {delivery_id} for PO {order.id} was marked {status}.",
+        delivery_id,
+    )
     db.session.commit()
-    return jsonify({"status": "success", "deliveryStatus": status})
+    return jsonify({"status": "success", "deliveryStatus": status, "newStock": float(item.stock or 0) if item else None})
 
 # READ-ONLY MANAGER DELIVERY MONITORING
 @app.route("/api/deliveries")
@@ -1479,17 +1601,22 @@ def get_purchase_requests():
         requests_list.sort(key=lambda r: (0 if r.status == "Pending" else 1 if r.status == "Approved" else 2, r.id or ""))
     else:
         return jsonify({"error": "Unauthorized"}), 401
-    return jsonify([{
-        "id": r.id,
-        "itemName": r.item_name,
-        "qty": r.qty,
-        "unit": r.unit,
-        "reason": r.reason,
-        "requestedBy": r.requested_by,
-        "status": r.status,
-        "date": r.date,
-        "reviewNote": r.review_note,
-    } for r in requests_list])
+    result = []
+    for r in requests_list:
+        item = Inventory.query.filter(db.func.lower(Inventory.name) == r.item_name.lower()).first()
+        result.append({
+            "id": r.id,
+            "itemName": r.item_name,
+            "qty": r.qty,
+            "unit": r.unit,
+            "reason": r.reason,
+            "requestedBy": r.requested_by,
+            "supplierName": r.supplier_name or (item.supplier_name if item else "") or "",
+            "status": r.status,
+            "date": r.date,
+            "reviewNote": r.review_note,
+        })
+    return jsonify(result)
 
 @app.route("/api/purchase-requests", methods=["POST"])
 def create_purchase_request():
@@ -1497,12 +1624,18 @@ def create_purchase_request():
         return jsonify({"error": "Inventory Staff access required"}), 403
     data = request.get_json(silent=True) or {}
     item_name = str(data.get("itemName", "")).strip()
+    supplier_name = str(data.get("supplierName", "")).strip()
     try:
         qty = float(data.get("qty", 0))
     except (TypeError, ValueError):
         qty = 0
     if not item_name or qty <= 0:
         return jsonify({"error": "Item name and quantity are required."}), 400
+    item = Inventory.query.filter(db.func.lower(Inventory.name) == item_name.lower()).first()
+    if not supplier_name and item:
+        supplier_name = item.supplier_name or ""
+    if not supplier_name:
+        return jsonify({"error": "Select a supplier for this purchase request."}), 400
     req_id = f"PR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     record = PurchaseRequest(
         id=req_id,
@@ -1511,11 +1644,20 @@ def create_purchase_request():
         unit=data.get("unit", "pcs"),
         reason=str(data.get("reason", "")).strip(),
         requested_by=session.get("username", "staff"),
+        supplier_name=supplier_name,
         status="Pending",
         date=datetime.now().strftime("%B %d, %Y · %I:%M %p"),
     )
     db.session.add(record)
     db.session.add(ActivityLog(event="Purchase Request submitted", item=item_name, reference=req_id, status="Pending", time=datetime.now().strftime("%H:%M")))
+    create_notification(
+        "manager",
+        "manager",
+        "new_purchase_request",
+        "New Purchase Request",
+        f"{session.get('username', 'staff')} requested {item_name} ({qty} {record.unit}) from {supplier_name}.",
+        req_id,
+    )
     db.session.commit()
     return jsonify({"status": "success", "id": req_id})
 
@@ -1534,6 +1676,23 @@ def review_purchase_request():
     if action == "approve":
         po = create_po_from_purchase_request(record)
         po_id = po.id
+        create_notification(
+            "staff",
+            record.requested_by,
+            "purchase_request_approved",
+            "Purchase Request Approved",
+            f"Your request {record.id} for {record.item_name} was approved. PO {po_id} sent to {po.supplier}.",
+            record.id,
+        )
+    else:
+        create_notification(
+            "staff",
+            record.requested_by,
+            "purchase_request_rejected",
+            "Purchase Request Rejected",
+            f"Your request {record.id} for {record.item_name} was rejected.",
+            record.id,
+        )
     db.session.add(ActivityLog(event=f"Purchase Request {record.status}", item=record.item_name, reference=record.id, status=record.status, time=datetime.now().strftime("%H:%M")))
     db.session.commit()
     return jsonify({"status": "success", "poId": po_id})
@@ -1601,8 +1760,7 @@ def update_support_request():
 def supplier_purchase_orders():
     if not supplier_api_allowed():
         return jsonify({"error": "Supplier access required"}), 403
-    company = get_supplier_company_for_user(session.get("username"))
-    orders = PurchaseOrder.query.filter(PurchaseOrder.supplier == company).order_by(PurchaseOrder.id.desc()).all() if company else []
+    orders = purchase_orders_for_supplier(session.get("username"))
     return jsonify([{
         "id": o.id,
         "itemName": o.item_name,
@@ -1624,11 +1782,19 @@ def supplier_respond_po():
     po = PurchaseOrder.query.get(data.get("id"))
     action = str(data.get("action", "")).lower()
     company = get_supplier_company_for_user(session.get("username"))
-    if not po or po.supplier != company or action not in {"accept", "reject"}:
+    if not po or not supplier_matches_company(po.supplier, company) or action not in {"accept", "reject"}:
         return jsonify({"error": "Purchase order not found or not assigned to your company."}), 404
     po.status = "Accepted" if action == "accept" else "Rejected by Supplier"
     event = "Purchase Order accepted" if action == "accept" else "Purchase Order rejected"
     db.session.add(ActivityLog(event=event, item=po.item_name, reference=po.id, status=po.status, time=datetime.now().strftime("%H:%M")))
+    create_notification(
+        "manager",
+        "manager",
+        "purchase_order_accepted" if action == "accept" else "purchase_order_rejected",
+        "Purchase Order " + ("Accepted" if action == "accept" else "Rejected"),
+        f"{company} {'accepted' if action == 'accept' else 'rejected'} PO {po.id} for {po.item_name}.",
+        po.id,
+    )
     db.session.commit()
     return jsonify({"status": "success", "deliveryId": delivery_id_for_po(po.id)})
 
@@ -1636,8 +1802,7 @@ def supplier_respond_po():
 def supplier_deliveries():
     if not supplier_api_allowed():
         return jsonify({"error": "Supplier access required"}), 403
-    company = get_supplier_company_for_user(session.get("username"))
-    orders = PurchaseOrder.query.filter(PurchaseOrder.supplier == company).order_by(PurchaseOrder.id.desc()).all() if company else []
+    orders = purchase_orders_for_supplier(session.get("username"))
     receipts = {r.po_id: r for r in ReceivingRecord.query.all()}
     return jsonify([{
         "deliveryId": receipts[o.id].delivery_id if o.id in receipts else delivery_id_for_po(o.id),
@@ -1758,8 +1923,7 @@ def manager_dashboard():
 def supplier_dashboard():
     if not supplier_api_allowed():
         return jsonify({"error": "Supplier access required"}), 403
-    company = get_supplier_company_for_user(session.get("username"))
-    orders = PurchaseOrder.query.filter(PurchaseOrder.supplier == company).all() if company else []
+    orders = purchase_orders_for_supplier(session.get("username"))
     return jsonify({
         "newOrders": len([o for o in orders if o.status in {"Waiting for Supplier", "Transmitted"}]),
         "acceptedOrders": len([o for o in orders if o.status == "Accepted"]),
@@ -1768,6 +1932,69 @@ def supplier_dashboard():
         "rejectedOrders": len([o for o in orders if "Rejected" in (o.status or "")]),
         "profile": profile_payload("supplier", session.get("username")),
     })
+
+def current_notification_scope():
+    role = session.get("role")
+    if role == "manager" and manager_api_allowed():
+        return "manager", "manager"
+    if role == "staff" and staff_api_allowed():
+        return "staff", session.get("username", "")
+    if role == "supplier" and supplier_api_allowed():
+        return "supplier", notification_recipient_key("supplier", session.get("username"))
+    return None, None
+
+@app.route("/api/notifications")
+def get_notifications():
+    role, recipient_key = current_notification_scope()
+    if not role:
+        return jsonify({"error": "Unauthorized"}), 401
+    notes = Notification.query.filter_by(
+        recipient_role=role,
+        recipient_key=recipient_key,
+    ).order_by(Notification.id.desc()).limit(50).all()
+    unread = Notification.query.filter_by(
+        recipient_role=role,
+        recipient_key=recipient_key,
+        is_read=False,
+    ).count()
+    return jsonify({
+        "unreadCount": unread,
+        "items": [{
+            "id": note.id,
+            "eventType": note.event_type,
+            "title": note.title,
+            "message": note.message,
+            "reference": note.reference,
+            "isRead": note.is_read,
+            "time": note.created_at.strftime("%I:%M %p") if note.created_at else "",
+            "date": note.created_at.strftime("%B %d, %Y") if note.created_at else "",
+        } for note in notes],
+    })
+
+@app.route("/api/notifications/mark-read", methods=["POST"])
+def mark_notification_read():
+    role, recipient_key = current_notification_scope()
+    if not role:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    note = Notification.query.get(data.get("id"))
+    if note and note.recipient_role == role and note.recipient_key == recipient_key:
+        note.is_read = True
+        db.session.commit()
+    return jsonify({"status": "success"})
+
+@app.route("/api/notifications/mark-all-read", methods=["POST"])
+def mark_all_notifications_read():
+    role, recipient_key = current_notification_scope()
+    if not role:
+        return jsonify({"error": "Unauthorized"}), 401
+    Notification.query.filter_by(
+        recipient_role=role,
+        recipient_key=recipient_key,
+        is_read=False,
+    ).update({"is_read": True})
+    db.session.commit()
+    return jsonify({"status": "success"})
 
 def initialize_app():
     with app.app_context():

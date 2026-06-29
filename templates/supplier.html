@@ -30,6 +30,8 @@
     @media(max-width:760px){ .company-info-grid,.summary-stat-row{ grid-template-columns:1fr; } }
   </style>
   <script defer src="{{ url_for('static', filename='js/portal-profile.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/portal-sidebar.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/portal-notifications.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/supplier-portal.js') }}"></script>
 </head>
 <body data-username="{{ username }}">
@@ -82,6 +84,13 @@
         <div><h1 id="supplier-page-title">Dashboard Overview</h1><p id="supplier-page-subtitle">Purchase orders, deliveries, and company activity</p></div>
       </div>
       <div class="staff-user">
+        <div class="portal-notifications-wrap">
+          <button type="button" class="portal-notification-button" id="portal-notification-button" aria-label="Notifications"><i class="ti ti-bell"></i><span id="portal-notification-count" hidden>0</span></button>
+          <div class="portal-notification-panel" id="portal-notification-panel" hidden>
+            <div class="portal-notification-header"><strong>Notifications</strong><button type="button" id="portal-notification-mark-all">Mark all as read</button></div>
+            <div id="portal-notification-list" class="portal-notification-list"></div>
+          </div>
+        </div>
         <div class="staff-user-copy"><strong id="portal-user-name">{{ username }}</strong><span>Supplier</span></div>
         <div class="staff-avatar" id="portal-user-avatar">S</div>
       </div>
