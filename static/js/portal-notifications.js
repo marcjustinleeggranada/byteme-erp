@@ -82,16 +82,37 @@
       .then(loadNotifications);
   }
 
+  function positionPanel() {
+    var button = $("portal-notification-button");
+    var panel = $("portal-notification-panel");
+    if (!button || !panel || panel.hidden) return;
+    var rect = button.getBoundingClientRect();
+    var panelWidth = panel.offsetWidth || 340;
+    var left = Math.max(16, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 16));
+    panel.style.position = "fixed";
+    panel.style.top = Math.round(rect.bottom + 8) + "px";
+    panel.style.left = Math.round(left) + "px";
+    panel.style.right = "auto";
+    panel.style.zIndex = "10000";
+  }
+
   function togglePanel(event) {
     event.stopPropagation();
     var panel = $("portal-notification-panel");
     if (!panel) return;
     panel.hidden = !panel.hidden;
+    if (!panel.hidden) positionPanel();
   }
 
   function closePanel() {
     var panel = $("portal-notification-panel");
-    if (panel) panel.hidden = true;
+    if (panel) {
+      panel.hidden = true;
+      panel.style.position = "";
+      panel.style.top = "";
+      panel.style.left = "";
+      panel.style.right = "";
+    }
   }
 
   function loadNotifications() {
@@ -139,6 +160,8 @@
     document.addEventListener("click", function (event) {
       if (!event.target.closest(".portal-notifications-wrap")) closePanel();
     });
+    window.addEventListener("resize", positionPanel);
+    window.addEventListener("scroll", positionPanel, true);
     loadNotifications();
     startPolling();
   }

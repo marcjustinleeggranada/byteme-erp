@@ -192,6 +192,28 @@ class DeliveryRecord(db.Model):
     po_id = db.Column(db.String(50))
     status = db.Column(db.String(50))
     time = db.Column(db.String(50))
+    resolution_id = db.Column(db.String(50), nullable=True)
+
+class DeliveryResolution(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    resolution_id = db.Column(db.String(50), unique=True, nullable=False)
+    po_id = db.Column(db.String(50), nullable=False)
+    original_delivery_id = db.Column(db.String(50), nullable=True)
+    new_delivery_id = db.Column(db.String(50), nullable=True)
+    supplier = db.Column(db.String(100), nullable=False)
+    item_name = db.Column(db.String(100), nullable=False)
+    quantity = db.Column(db.Float, default=0)
+    unit = db.Column(db.String(20))
+    action = db.Column(db.String(50), nullable=False)
+    status = db.Column(db.String(50), default="Open")
+    rejection_reason = db.Column(db.Text)
+    manager_note = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+ACTIVE_SHIPMENT_STATUSES = {
+    "In Transit", "QR Generated", "Pending Redelivery", "Pending Replacement",
+}
 
 class StockAdjustment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -375,10 +397,91 @@ def parse_delivery_lookup(raw):
             pass
     return text
 
+def delivery_id_for_po(po_id):
+    clean_id = "".join(character for character in str(po_id) if character.isalnum())
+    return f"DEL-{clean_id[-8:].upper()}"
+
+def new_delivery_id_for_po(po_id):
+    clean_id = "".join(character for character in str(po_id) if character.isalnum())[-6:]
+    stamp = datetime.now().strftime("%H%M%S")
+    return f"DEL-{clean_id.upper()}-{stamp}"
+
+def find_receiving_for_resolution(delivery_id=None, po_number=None):
+    lookup = parse_delivery_lookup(delivery_id or "")
+    if lookup:
+        receipt = ReceivingRecord.query.filter(
+            db.func.lower(ReceivingRecord.delivery_id) == lookup.lower()
+        ).first()
+        if receipt:
+            return receipt
+        if lookup.upper().startswith("PO-"):
+            po_number = po_number or lookup
+    if po_number:
+        return ReceivingRecord.query.filter_by(po_id=po_number).order_by(
+            ReceivingRecord.id.desc()
+        ).first()
+    return None
+
+def find_active_shipment(delivery_id=None, po_id=None):
+    lookup = parse_delivery_lookup(delivery_id or "")
+    if lookup:
+        shipment = DeliveryRecord.query.filter(
+            db.func.lower(DeliveryRecord.qr_value) == lookup.lower()
+        ).first()
+        if shipment and (shipment.status or "") in ACTIVE_SHIPMENT_STATUSES:
+            return shipment
+    if po_id:
+        for shipment in DeliveryRecord.query.filter_by(po_id=po_id).order_by(DeliveryRecord.id.desc()).all():
+            if (shipment.status or "") in ACTIVE_SHIPMENT_STATUSES:
+                return shipment
+    return None
+
+def successful_receipt_for_po(po_id):
+    return ReceivingRecord.query.filter_by(po_id=po_id).filter(
+        ReceivingRecord.status.in_(["Delivered", "Partial"])
+    ).first()
+
+def active_delivery_id_for_po(po_id):
+    shipment = find_active_shipment(po_id=po_id)
+    if shipment:
+        return shipment.qr_value
+    resolution = DeliveryResolution.query.filter_by(po_id=po_id).filter(
+        DeliveryResolution.new_delivery_id.isnot(None),
+        DeliveryResolution.status.in_(["In Progress", "Open"]),
+    ).order_by(DeliveryResolution.id.desc()).first()
+    if resolution and resolution.new_delivery_id:
+        return resolution.new_delivery_id
+    return delivery_id_for_po(po_id)
+
+def resolution_payload(record):
+    return {
+        "id": record.id,
+        "resolutionId": record.resolution_id,
+        "poNumber": record.po_id,
+        "originalDeliveryId": record.original_delivery_id or "",
+        "newDeliveryId": record.new_delivery_id or "",
+        "supplier": record.supplier,
+        "itemName": record.item_name,
+        "quantity": record.quantity,
+        "unit": record.unit or "",
+        "action": record.action,
+        "status": record.status,
+        "rejectionReason": record.rejection_reason or "",
+        "managerNote": record.manager_note or "",
+        "date": record.created_at.strftime("%B %d, %Y · %I:%M %p") if record.created_at else "",
+    }
+
 def find_order_for_delivery_lookup(delivery_id):
     lookup = parse_delivery_lookup(delivery_id)
     if not lookup:
         return None
+    shipment = DeliveryRecord.query.filter(
+        db.func.lower(DeliveryRecord.qr_value) == lookup.lower()
+    ).first()
+    if shipment:
+        order = PurchaseOrder.query.get(shipment.po_id)
+        if order:
+            return order
     receipt = ReceivingRecord.query.filter(
         db.func.lower(ReceivingRecord.delivery_id) == lookup.lower()
     ).first()
@@ -1041,6 +1144,9 @@ def ensure_user_schema():
         pr_created_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(purchase_request)"))}
         if "created_at" not in pr_created_columns:
             db.session.execute(text("ALTER TABLE purchase_request ADD COLUMN created_at DATETIME"))
+        dr_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(delivery_record)"))}
+        if "resolution_id" not in dr_columns:
+            db.session.execute(text("ALTER TABLE delivery_record ADD COLUMN resolution_id VARCHAR(50)"))
     else:
         columns = {
             row[0]
@@ -1092,6 +1198,14 @@ def ensure_user_schema():
         }
         if "created_at" not in pr_created_columns:
             db.session.execute(text("ALTER TABLE purchase_request ADD COLUMN created_at TIMESTAMP"))
+        dr_columns = {
+            row[0]
+            for row in db.session.execute(text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'delivery_record'"
+            ))
+        }
+        if "resolution_id" not in dr_columns:
+            db.session.execute(text("ALTER TABLE delivery_record ADD COLUMN resolution_id VARCHAR(50)"))
     db.session.commit()
     for record in PurchaseRequest.query.filter(PurchaseRequest.created_at.is_(None)).all():
         record.created_at = purchase_request_created_at(record)
@@ -1573,10 +1687,6 @@ def staff_api_allowed():
         return False
     return True
 
-def delivery_id_for_po(po_id):
-    clean_id = "".join(character for character in str(po_id) if character.isalnum())
-    return f"DEL-{clean_id[-8:].upper()}"
-
 @app.route("/api/staff/profile")
 def staff_profile():
     if not staff_api_allowed():
@@ -1685,12 +1795,32 @@ def staff_delivery_detail(delivery_id):
     order = find_order_for_delivery_lookup(delivery_id)
     if not order:
         return jsonify({"error": "Delivery ID was not found."}), 404
-    existing = ReceivingRecord.query.filter_by(po_id=order.id).first()
+    lookup = parse_delivery_lookup(delivery_id)
+    shipment = find_active_shipment(delivery_id=lookup, po_id=order.id)
+    success = successful_receipt_for_po(order.id)
+    rejected = ReceivingRecord.query.filter_by(po_id=order.id, status="Rejected").order_by(
+        ReceivingRecord.id.desc()
+    ).first()
     pending_statuses = {"Transmitted", "Waiting for Supplier", "Accepted", "In Transit"}
-    status = existing.status if existing else (order.status if order.status in pending_statuses else order.status or "Pending")
+    if success:
+        display_id = success.delivery_id
+        status = success.status
+        already_received = True
+    elif shipment:
+        display_id = shipment.qr_value
+        status = shipment.status
+        already_received = False
+    elif rejected:
+        display_id = active_delivery_id_for_po(order.id)
+        status = rejected.status
+        already_received = False
+    else:
+        display_id = delivery_id_for_po(order.id)
+        status = order.status if order.status in pending_statuses else order.status or "Pending"
+        already_received = False
     supplier_profile = Supplier.query.filter_by(name=order.supplier).first()
     return jsonify({
-        "deliveryId": existing.delivery_id if existing else delivery_id_for_po(order.id),
+        "deliveryId": display_id,
         "poNumber": order.id,
         "supplier": order.supplier or "Unassigned Supplier",
         "supplierId": order.supplier_id or "",
@@ -1707,7 +1837,7 @@ def staff_delivery_detail(delivery_id):
             "quantity": order.qty,
             "unit": order.unit,
         }],
-        "alreadyReceived": bool(existing),
+        "alreadyReceived": already_received,
         "scanSuccess": True,
         "supplierEmail": supplier_profile.email if supplier_profile else "",
         "supplierPhone": supplier_profile.phone if supplier_profile else "",
@@ -1721,8 +1851,27 @@ def confirm_staff_delivery():
     order = PurchaseOrder.query.get(data.get("poNumber"))
     if not order:
         return jsonify({"error": "Purchase order was not found."}), 404
-    if ReceivingRecord.query.filter_by(po_id=order.id).first():
+    if successful_receipt_for_po(order.id):
         return jsonify({"error": "This delivery has already been recorded."}), 409
+    lookup = parse_delivery_lookup(data.get("deliveryId") or "")
+    shipment = find_active_shipment(delivery_id=lookup, po_id=order.id)
+    if lookup:
+        prior = ReceivingRecord.query.filter(
+            db.func.lower(ReceivingRecord.delivery_id) == lookup.lower()
+        ).first()
+        if prior and prior.status in {"Delivered", "Partial"}:
+            return jsonify({"error": "This delivery has already been recorded."}), 409
+        delivery_id = lookup
+    elif shipment:
+        delivery_id = shipment.qr_value
+    else:
+        if ReceivingRecord.query.filter_by(po_id=order.id).filter(
+            ReceivingRecord.status.in_(["Delivered", "Partial"])
+        ).first():
+            return jsonify({"error": "This delivery has already been recorded."}), 409
+        delivery_id = delivery_id_for_po(order.id)
+    if ReceivingRecord.query.filter_by(delivery_id=delivery_id).first():
+        delivery_id = new_delivery_id_for_po(order.id)
     try:
         received_quantity = float(data.get("receivedQuantity", 0))
     except (TypeError, ValueError):
@@ -1748,7 +1897,6 @@ def confirm_staff_delivery():
             item.stock = float(item.stock or 0) + received_quantity
 
     timestamp = datetime.now().strftime("%B %d, %Y · %I:%M %p")
-    delivery_id = delivery_id_for_po(order.id)
     staff_user = portal_username("staff") or "staff"
     receipt = ReceivingRecord(
         delivery_id=delivery_id,
@@ -1766,7 +1914,17 @@ def confirm_staff_delivery():
     )
     order.status = status
     db.session.add(receipt)
-    db.session.add(DeliveryRecord(qr_value=delivery_id, po_id=order.id, status=status, time=datetime.now().strftime("%H:%M")))
+    if shipment:
+        shipment.status = status
+    else:
+        db.session.add(DeliveryRecord(qr_value=delivery_id, po_id=order.id, status=status, time=datetime.now().strftime("%H:%M")))
+    if status in {"Delivered", "Partial"}:
+        for resolution in DeliveryResolution.query.filter_by(po_id=order.id).filter(
+            DeliveryResolution.status.in_(["In Progress", "Open"])
+        ).all():
+            if resolution.action in {"Redelivery", "Replace Item", "Contact Manager"}:
+                resolution.status = "Completed"
+                resolution.updated_at = datetime.now()
     db.session.add(ActivityLog(event="Delivery Received" if status != "Rejected" else "Delivery Rejected", item=order.item_name, reference=delivery_id, status=status, time=datetime.now().strftime("%H:%M")))
     create_notification(
         "manager",
@@ -2063,8 +2221,46 @@ def supplier_purchase_orders():
         "type": o.type,
         "date": o.date,
         "expectedDeliveryDate": o.expected_delivery_date or "—",
-        "deliveryId": delivery_id_for_po(o.id),
+        "deliveryId": active_delivery_id_for_po(o.id),
     } for o in orders])
+
+@app.route("/api/delivery-resolutions")
+def get_delivery_resolutions():
+    if not manager_api_allowed():
+        return jsonify({"error": "Unauthorized"}), 401
+    records = DeliveryResolution.query.order_by(DeliveryResolution.id.desc()).all()
+    return jsonify([resolution_payload(r) for r in records])
+
+@app.route("/api/delivery-resolutions/update", methods=["POST"])
+def update_delivery_resolution():
+    if not manager_api_allowed():
+        return jsonify({"error": "Manager access required"}), 403
+    data = request.get_json(silent=True) or {}
+    record = DeliveryResolution.query.get(data.get("id"))
+    status = str(data.get("status", "")).strip()
+    allowed = {
+        "Open", "In Progress", "Refund Pending", "Refund in Progress",
+        "Completed", "Closed", "Resolved",
+    }
+    if not record or status not in allowed:
+        return jsonify({"error": "Invalid resolution update."}), 400
+    record.status = status
+    record.manager_note = str(data.get("note", record.manager_note or "")).strip()
+    record.updated_at = datetime.now()
+    if record.action == "Refund" and status in {"Completed", "Closed", "Resolved"}:
+        po = PurchaseOrder.query.get(record.po_id)
+        if po:
+            po.status = "Refund Resolved"
+    create_notification(
+        "supplier",
+        record.supplier,
+        "delivery_resolution_update",
+        "Delivery Resolution Updated",
+        f"Manager updated {record.resolution_id} to {status}.",
+        record.resolution_id,
+    )
+    db.session.commit()
+    return jsonify({"status": "success"})
 
 @app.route("/api/supplier/purchase-orders/respond", methods=["POST"])
 def supplier_respond_po():
@@ -2099,9 +2295,14 @@ def supplier_generate_qr():
     company = get_supplier_company_for_user(portal_username("supplier"))
     if not po or not supplier_matches_company(po.supplier, company):
         return jsonify({"error": "Purchase order not found or not assigned to your company."}), 404
-    if po.status not in {"Accepted", "In Transit"}:
-        return jsonify({"error": "Generate a QR code only after accepting the purchase order."}), 400
-    delivery_id = delivery_id_for_po(po.id)
+    open_redelivery = DeliveryResolution.query.filter_by(po_id=po.id).filter(
+        DeliveryResolution.action.in_(["Redelivery", "Replace Item"]),
+        DeliveryResolution.status.in_(["In Progress", "Open"]),
+    ).first()
+    if po.status not in {"Accepted", "In Transit"} and not open_redelivery:
+        return jsonify({"error": "Generate a QR code only after accepting the purchase order or starting a redelivery."}), 400
+    shipment = find_active_shipment(po_id=po.id)
+    delivery_id = shipment.qr_value if shipment else active_delivery_id_for_po(po.id)
     if po.status == "Accepted":
         po.status = "In Transit"
     existing = DeliveryRecord.query.filter_by(po_id=po.id, qr_value=delivery_id).first()
@@ -2111,7 +2312,10 @@ def supplier_generate_qr():
             po_id=po.id,
             status="QR Generated",
             time=datetime.now().strftime("%H:%M"),
+            resolution_id=open_redelivery.resolution_id if open_redelivery else None,
         ))
+    elif existing.status in ACTIVE_SHIPMENT_STATUSES:
+        existing.status = "QR Generated"
     db.session.add(ActivityLog(
         event="Delivery QR Generated",
         item=po.item_name,
@@ -2152,15 +2356,27 @@ def supplier_deliveries():
     result = []
     for o in orders:
         receipt = receipts.get(o.id)
+        shipment = find_active_shipment(po_id=o.id)
+        open_resolution = DeliveryResolution.query.filter_by(po_id=o.id).order_by(
+            DeliveryResolution.id.desc()
+        ).first()
         status = receipt.status if receipt else o.status
+        if shipment:
+            status = shipment.status or status
         include = bool(receipt) or o.status in visible_statuses or (status or "").lower() == "rejected"
-        qr_record = DeliveryRecord.query.filter_by(po_id=o.id).order_by(DeliveryRecord.id.desc()).first()
-        if qr_record and not receipt:
-            status = qr_record.status or status
+        if shipment and not receipt:
             include = True
         if include:
+            if receipt and receipt.status in {"Delivered", "Partial"}:
+                display_id = receipt.delivery_id
+            elif open_resolution and open_resolution.new_delivery_id:
+                display_id = open_resolution.new_delivery_id
+            elif receipt:
+                display_id = receipt.delivery_id
+            else:
+                display_id = active_delivery_id_for_po(o.id)
             result.append({
-                "deliveryId": receipt.delivery_id if receipt else delivery_id_for_po(o.id),
+                "deliveryId": display_id,
                 "poNumber": o.id,
                 "itemName": o.item_name,
                 "qty": o.qty,
@@ -2168,8 +2384,8 @@ def supplier_deliveries():
                 "status": status,
                 "date": receipt.date_received if receipt else o.date,
                 "rejectionReason": receipt.rejection_reason if receipt else "",
-                "resolutionAction": receipt.resolution_action if receipt else "",
-                "resolutionStatus": receipt.resolution_status if receipt else "",
+                "resolutionAction": (open_resolution.action if open_resolution else None) or (receipt.resolution_action if receipt else ""),
+                "resolutionStatus": (open_resolution.status if open_resolution else None) or (receipt.resolution_status if receipt else ""),
             })
     return jsonify(result)
 
@@ -2181,22 +2397,69 @@ def supplier_resolve_delivery():
     action = str(data.get("action", "")).strip()
     if action not in {"Redelivery", "Replace Item", "Refund", "Contact Manager"}:
         return jsonify({"error": "Select a valid resolution action."}), 400
-    receipt = ReceivingRecord.query.filter_by(delivery_id=data.get("deliveryId")).first()
+    delivery_id = str(data.get("deliveryId", "")).strip()
+    po_number = str(data.get("poNumber", "")).strip()
     company = get_supplier_company_for_user(portal_username("supplier"))
-    if not receipt or not supplier_matches_company(receipt.supplier, company):
+    receipt = find_receiving_for_resolution(delivery_id, po_number)
+    po = PurchaseOrder.query.get(po_number or (receipt.po_id if receipt else ""))
+    if not po and delivery_id.upper().startswith("PO-"):
+        po = PurchaseOrder.query.get(delivery_id)
+    if not po or not supplier_matches_company(po.supplier, company):
         return jsonify({"error": "Delivery record not found."}), 404
-    receipt.resolution_action = action
-    receipt.resolution_status = "In Progress"
+    if receipt and receipt.status != "Rejected" and action in {"Redelivery", "Replace Item", "Refund"}:
+        return jsonify({"error": "Resolution is only available for rejected deliveries."}), 400
+
+    resolution_id = f"RES-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    new_delivery_id = None
+    if action == "Refund":
+        status = "Refund Pending"
+    elif action == "Contact Manager":
+        status = "Open"
+    else:
+        status = "In Progress"
+        new_delivery_id = new_delivery_id_for_po(po.id)
+        shipment_status = "Pending Redelivery" if action == "Redelivery" else "Pending Replacement"
+        po.status = "In Transit"
+        db.session.add(DeliveryRecord(
+            qr_value=new_delivery_id,
+            po_id=po.id,
+            status=shipment_status,
+            time=datetime.now().strftime("%H:%M"),
+            resolution_id=resolution_id,
+        ))
+
+    resolution = DeliveryResolution(
+        resolution_id=resolution_id,
+        po_id=po.id,
+        original_delivery_id=receipt.delivery_id if receipt else delivery_id_for_po(po.id),
+        new_delivery_id=new_delivery_id,
+        supplier=company,
+        item_name=po.item_name,
+        quantity=float(po.qty or 0),
+        unit=po.unit,
+        action=action,
+        status=status,
+        rejection_reason=receipt.rejection_reason if receipt else "",
+    )
+    db.session.add(resolution)
+    if receipt:
+        receipt.resolution_action = action
+        receipt.resolution_status = status
     create_notification(
         "manager",
         "manager",
         "delivery_resolution",
         "Supplier Delivery Resolution",
-        f"{company} requested {action} for rejected delivery {receipt.delivery_id}.",
-        receipt.delivery_id,
+        f"{company} requested {action} for PO {po.id} ({resolution_id}).",
+        resolution_id,
     )
     db.session.commit()
-    return jsonify({"status": "success"})
+    return jsonify({
+        "status": "success",
+        "resolutionId": resolution_id,
+        "newDeliveryId": new_delivery_id,
+        "resolutionStatus": status,
+    })
 
 @app.route("/api/supplier/catalog", methods=["GET", "POST"])
 def supplier_catalog_api():

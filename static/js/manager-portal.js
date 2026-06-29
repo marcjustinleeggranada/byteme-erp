@@ -8,7 +8,7 @@
     "inventory-list": { title: "Inventory Management", subtitle: "Monitor stock levels and reorder risk" },
     "purchase-requests": { title: "Purchase Requests", subtitle: "Review staff-submitted procurement requests" },
     "purchase-orders": { title: "Purchase Orders", subtitle: "Approve, reject, and create purchase orders" },
-    "delivery-monitoring": { title: "Delivery Monitoring", subtitle: "Read-only delivery pipeline tracking" },
+    "delivery-monitoring": { title: "Delivery Monitoring", subtitle: "Delivery pipeline and resolution tracking" },
     "user-management": { title: "User Management", subtitle: "Create and maintain staff and supplier accounts" },
     "support-requests": { title: "Support Requests", subtitle: "Respond to staff and supplier support tickets" }
   };
@@ -18,6 +18,7 @@
   var purchaseRequests = [];
   var purchaseOrders = [];
   var deliveries = [];
+  var deliveryResolutions = [];
   var users = [];
   var support = [];
   var activity = [];
@@ -273,6 +274,16 @@
     return apiFetch("/api/deliveries").then(function (data) {
       deliveries = Array.isArray(data) ? data : [];
       return deliveries;
+    });
+  }
+
+  function loadDeliveryResolutions() {
+    return apiFetch("/api/delivery-resolutions").then(function (data) {
+      deliveryResolutions = Array.isArray(data) ? data : [];
+      return deliveryResolutions;
+    }).catch(function () {
+      deliveryResolutions = [];
+      return deliveryResolutions;
     });
   }
 
@@ -618,6 +629,47 @@
     }).join("");
   }
 
+  function resolutionStatusOptions(record) {
+    var base = ["Open", "In Progress", "Completed", "Closed", "Resolved"];
+    if (record.action === "Refund") {
+      base = ["Refund Pending", "Refund in Progress", "Completed", "Closed", "Resolved"];
+    }
+    return base;
+  }
+
+  function renderDeliveryResolutions() {
+    var tbody = $("delivery-resolutions-tbody");
+    if (!tbody) return;
+    if (!deliveryResolutions.length) {
+      tbody.innerHTML = emptyRow(9, "No delivery resolution requests yet.");
+      return;
+    }
+    tbody.innerHTML = deliveryResolutions.map(function (r) {
+      var options = resolutionStatusOptions(r);
+      var statusSelect =
+        '<select class="resolution-status-select" data-resolution-id="' + r.id + '" style="padding:6px 8px;border:1px solid var(--line);border-radius:7px;font-size:10px;min-width:120px">' +
+        options.map(function (status) {
+          return '<option value="' + escapeHtml(status) + '"' + (r.status === status ? " selected" : "") + ">" + escapeHtml(status) + "</option>";
+        }).join("") +
+        "</select>";
+      var noteInput =
+        '<input type="text" class="resolution-note-input" data-resolution-id="' + r.id + '" value="' + escapeAttr(r.managerNote || "") + '" placeholder="Add note" style="padding:6px 8px;border:1px solid var(--line);border-radius:7px;font-size:10px;width:100%;min-width:100px;max-width:180px">';
+      return (
+        "<tr>" +
+        "<td>" + escapeHtml(r.resolutionId) + "</td>" +
+        "<td>" + escapeHtml(r.poNumber) + "</td>" +
+        "<td>" + escapeHtml(r.supplier) + "</td>" +
+        "<td>" + escapeHtml(r.itemName) + "</td>" +
+        "<td>" + escapeHtml(r.action) + "</td>" +
+        "<td>" + statusSelect + "</td>" +
+        "<td>" + escapeHtml(r.newDeliveryId || "—") + "</td>" +
+        "<td>" + escapeHtml(r.date || "—") + "</td>" +
+        "<td>" + noteInput + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+  }
+
   function renderUsers() {
     var tbody = $("user-management-tbody");
     if (!tbody) return;
@@ -699,6 +751,7 @@
     renderPurchaseRequests();
     renderPurchaseOrders();
     renderDeliveries();
+    renderDeliveryResolutions();
     renderUsers();
     renderSupport();
   }
@@ -714,6 +767,7 @@
       loadPurchaseRequests(),
       loadPurchaseOrders(),
       loadDeliveries(),
+      loadDeliveryResolutions(),
       loadUsers(),
       loadSupport(),
       loadSuppliers(),
@@ -1034,6 +1088,18 @@
       });
   }
 
+  function updateDeliveryResolution(id, status, note) {
+    apiFetch("/api/delivery-resolutions/update", {
+      method: "POST",
+      body: JSON.stringify({ id: id, status: status, note: note || "" }),
+    }).then(function () {
+      showToast("Delivery resolution updated.");
+      return refreshData();
+    }).catch(function (err) {
+      showToast(err.message || "Could not update resolution.", "error");
+    });
+  }
+
   function setupInventoryControls() {
     var search = $("inventory-search");
     var filter = $("inventory-status-filter");
@@ -1159,8 +1225,25 @@
       var select = event.target.closest(".support-status-select");
       if (select) {
         updateSupportStatus(Number(select.getAttribute("data-support-id")), select.value);
+        return;
+      }
+      var resSelect = event.target.closest(".resolution-status-select");
+      if (resSelect) {
+        var resId = Number(resSelect.getAttribute("data-resolution-id"));
+        var noteEl = document.querySelector('.resolution-note-input[data-resolution-id="' + resId + '"]');
+        updateDeliveryResolution(resId, resSelect.value, noteEl ? noteEl.value : "");
       }
     });
+
+    document.addEventListener("blur", function (event) {
+      var noteInput = event.target.closest(".resolution-note-input");
+      if (!noteInput) return;
+      var resId = Number(noteInput.getAttribute("data-resolution-id"));
+      var selectEl = document.querySelector('.resolution-status-select[data-resolution-id="' + resId + '"]');
+      if (selectEl) {
+        updateDeliveryResolution(resId, selectEl.value, noteInput.value);
+      }
+    }, true);
   }
 
   function init() {

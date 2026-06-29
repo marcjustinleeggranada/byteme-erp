@@ -953,6 +953,7 @@
         var decisionEl = form.querySelector('input[name="delivery-decision"]:checked');
         var payload = {
           poNumber: currentDelivery.poNumber,
+          deliveryId: currentDelivery.deliveryId,
           receivedQuantity: parseFloat($("received-quantity") && $("received-quantity").value) || 0,
           condition: $("delivery-condition") && $("delivery-condition").value,
           decision: decisionEl && decisionEl.value,

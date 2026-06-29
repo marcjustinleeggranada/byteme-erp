@@ -799,7 +799,7 @@
       if ((row.status || "").toLowerCase().indexOf("reject") !== -1) {
         actions = '<div class="staff-table-actions">' +
           ['Redelivery', 'Replace Item', 'Refund', 'Contact Manager'].map(function (action) {
-            return '<button type="button" class="staff-btn secondary compact resolve-delivery-btn" data-delivery-id="' + escapeHtml(row.deliveryId) + '" data-action="' + escapeHtml(action) + '">' + escapeHtml(action) + '</button>';
+            return '<button type="button" class="staff-btn secondary compact resolve-delivery-btn" data-delivery-id="' + escapeHtml(row.deliveryId) + '" data-po-number="' + escapeHtml(row.poNumber) + '" data-action="' + escapeHtml(action) + '">' + escapeHtml(action) + '</button>';
           }).join("") +
           "</div>";
         if (row.rejectionReason) {
@@ -827,10 +827,15 @@
           method: "POST",
           body: JSON.stringify({
             deliveryId: btn.getAttribute("data-delivery-id"),
+            poNumber: btn.getAttribute("data-po-number"),
             action: btn.getAttribute("data-action"),
           }),
-        }).then(function () {
-          showToast("Resolution request submitted.");
+        }).then(function (result) {
+          var msg = "Resolution request submitted.";
+          if (result && result.newDeliveryId) {
+            msg += " New Delivery ID: " + result.newDeliveryId + ". Generate a QR code to continue.";
+          }
+          showToast(msg);
           return refreshData();
         }).catch(function (err) {
           showToast(err.message || "Could not submit resolution.", "error");
