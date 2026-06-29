@@ -279,7 +279,9 @@
     }
 
     function build(text) {
+      if (!text || text.length > 120) return null;
       var version = pickVersion(text);
+      if (!CAPACITY[version] || text.length > CAPACITY[version].data) return null;
       var data = encodeData(text, version);
       var best = null;
       var bestScore = Infinity;
@@ -374,8 +376,13 @@
       });
   }
 
+  function deliveryIdForPoClient(poId) {
+    var clean = String(poId || "").replace(/[^a-zA-Z0-9]/g, "");
+    return "DEL-" + clean.slice(-8).toUpperCase();
+  }
+
   function qrPayloadForPo(po) {
-    return JSON.stringify({ deliveryId: po.deliveryId, poId: po.id });
+    return po.deliveryId || deliveryIdForPoClient(po.id);
   }
 
   function loadActivity() {
@@ -698,33 +705,45 @@
     var area = $("qr-preview-area");
     if (!select || !area) return;
     var po = purchaseOrders.find(function (o) { return String(o.id) === String(select.value); });
-    if (!po || !po.deliveryId) {
-      area.innerHTML = '<i class="ti ti-qrcode" style="font-size:48px;color:#b8c6be"></i><p class="empty-state" style="padding:0">Select an accepted order and generate a QR code.</p>';
+    if (!po) {
+      showToast("Select an accepted purchase order first.", "error");
       return;
     }
-    var canvas = document.createElement("canvas");
-    if (!QR.draw(canvas, qrPayloadForPo(po))) {
-      showToast("Could not generate QR code.", "error");
-      return;
-    }
-    saveStoredQr({
-      deliveryId: po.deliveryId,
-      poNumber: po.id,
-      itemName: po.itemName,
-      qty: po.qty,
-      unit: po.unit,
-      status: "QR Generated",
-      date: new Date().toLocaleString(),
-      source: "local"
+    apiFetch("/api/supplier/purchase-orders/generate-qr", {
+      method: "POST",
+      body: JSON.stringify({ id: po.id }),
+    }).then(function (result) {
+      var deliveryId = result.qrValue || result.deliveryId || deliveryIdForPoClient(po.id);
+      po.deliveryId = deliveryId;
+      po.status = "In Transit";
+      var canvas = document.createElement("canvas");
+      if (!QR.draw(canvas, deliveryId)) {
+        showToast("Could not render QR code. Use Delivery ID: " + deliveryId, "error");
+        return;
+      }
+      saveStoredQr({
+        deliveryId: deliveryId,
+        poNumber: po.id,
+        itemName: po.itemName,
+        qty: po.qty,
+        unit: po.unit,
+        status: "QR Generated",
+        date: new Date().toLocaleString(),
+        source: "local",
+      });
+      area.innerHTML = "";
+      area.appendChild(canvas);
+      var meta = document.createElement("div");
+      meta.className = "qr-meta";
+      meta.innerHTML = "<strong>" + escapeHtml(deliveryId) + "</strong><span>PO #" + escapeHtml(po.id) + " · " + escapeHtml(po.itemName) + "</span>";
+      area.appendChild(meta);
+      showToast("QR code generated and saved to delivery history.");
+      renderDeliveryHistory();
+      renderPoAccepted();
+      renderQrSelect();
+    }).catch(function (err) {
+      showToast(err.message || "Could not generate QR code.", "error");
     });
-    area.innerHTML = "";
-    area.appendChild(canvas);
-    var meta = document.createElement("div");
-    meta.className = "qr-meta";
-    meta.innerHTML = "<strong>" + escapeHtml(po.deliveryId) + "</strong><span>PO #" + escapeHtml(po.id) + " · " + escapeHtml(po.itemName) + "</span>";
-    area.appendChild(meta);
-    showToast("QR code generated and saved to delivery history.");
-    renderDeliveryHistory();
   }
 
   function mergedDeliveryHistory() {
@@ -929,8 +948,12 @@
     }
     apiFetch("/api/supplier/catalog", { method: "POST", body: JSON.stringify({ catalog: updates }) })
       .then(function (result) {
-        showToast("Prices updated. The manager has been notified.");
-        return loadCatalog().then(renderCatalogPricing);
+        if (result.changed > 0) {
+          showToast("Prices updated. The manager has been notified.");
+        } else {
+          showToast("No price changes detected.");
+        }
+        return refreshData();
       })
       .catch(function (err) {
         showToast(err.message || "Could not save prices.", "error");

@@ -859,10 +859,26 @@
     if ($("verify-delivery-id")) $("verify-delivery-id").textContent = detail.deliveryId || "—";
     if ($("verify-po-number")) $("verify-po-number").textContent = detail.poNumber || "—";
     if ($("verify-supplier")) $("verify-supplier").textContent = detail.supplier || "—";
-    if ($("verify-item")) $("verify-item").textContent = detail.itemName || "—";
-    if ($("verify-item-name")) $("verify-item-name").textContent = detail.itemName || "—";
     if ($("verify-expected-quantity")) {
       $("verify-expected-quantity").textContent = formatQty(detail.expectedQuantity, detail.unit);
+    }
+    if ($("verify-delivery-date")) {
+      $("verify-delivery-date").textContent = detail.expectedDeliveryDate || detail.orderDate || "—";
+    }
+    if ($("verify-delivery-status-label")) {
+      $("verify-delivery-status-label").textContent = detail.orderStatus || detail.status || "Pending";
+    }
+    var itemsBody = $("verify-items-tbody");
+    if (itemsBody) {
+      var items = Array.isArray(detail.items) && detail.items.length
+        ? detail.items
+        : [{ itemName: detail.itemName, quantity: detail.expectedQuantity, unit: detail.unit }];
+      itemsBody.innerHTML = items.map(function (item) {
+        return (
+          "<tr><td>" + escapeHtml(item.itemName || "—") + "</td>" +
+          "<td>" + escapeHtml(formatQty(item.quantity, item.unit)) + "</td></tr>"
+        );
+      }).join("");
     }
 
     var statusText = detail.alreadyReceived ? "Already received" : (detail.status || "Pending verification");
