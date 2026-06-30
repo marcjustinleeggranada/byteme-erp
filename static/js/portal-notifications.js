@@ -61,7 +61,10 @@
     }
     list.innerHTML = items.map(function (note) {
       return (
-        '<button type="button" class="notification-item' + (note.isRead ? "" : " unread") + '" data-notification-id="' + note.id + '">' +
+        '<button type="button" class="notification-item' + (note.isRead ? "" : " unread") + '"' +
+        ' data-notification-id="' + note.id + '"' +
+        ' data-event-type="' + escapeHtml(note.eventType || "") + '"' +
+        ' data-reference="' + escapeHtml(note.reference || "") + '">' +
         '<strong>' + escapeHtml(note.title) + "</strong>" +
         "<span>" + escapeHtml(note.message) + "</span>" +
         '<small>' + escapeHtml(note.date || "") + " · " + escapeHtml(note.time || "") + "</small>" +
@@ -142,6 +145,7 @@
   }
 
   function setupNotifications() {
+    closePanel();
     var button = $("portal-notification-button");
     var markAllBtn = $("portal-notification-mark-all");
     var list = $("portal-notification-list");
@@ -154,7 +158,17 @@
       list.addEventListener("click", function (event) {
         var item = event.target.closest("[data-notification-id]");
         if (!item) return;
-        markRead(Number(item.getAttribute("data-notification-id")));
+        var note = {
+          id: Number(item.getAttribute("data-notification-id")),
+          eventType: item.getAttribute("data-event-type") || "",
+          reference: item.getAttribute("data-reference") || "",
+          title: item.querySelector("strong") ? item.querySelector("strong").textContent : "",
+          message: item.querySelector("span") ? item.querySelector("span").textContent : "",
+        };
+        closePanel();
+        markRead(note.id).then(function () {
+          document.dispatchEvent(new CustomEvent("portal-notification-action", { detail: note }));
+        });
       });
     }
     document.addEventListener("click", function (event) {
@@ -166,7 +180,7 @@
     startPolling();
   }
 
-  window.PortalNotifications = { setup: setupNotifications, reload: loadNotifications };
+  window.PortalNotifications = { setup: setupNotifications, reload: loadNotifications, close: closePanel };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", setupNotifications);

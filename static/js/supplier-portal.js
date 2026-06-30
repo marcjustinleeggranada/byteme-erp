@@ -759,6 +759,7 @@
         rejectionReason: d.rejectionReason || "",
         resolutionAction: d.resolutionAction || "",
         resolutionStatus: d.resolutionStatus || "",
+        needsResolution: !!d.needsResolution,
         source: "server"
       };
     });
@@ -773,6 +774,59 @@
       if (!seen[row.deliveryId]) merged.unshift(row);
     });
     return merged;
+  }
+
+  function resolutionIsClosed(row) {
+    var status = (row.resolutionStatus || "").toLowerCase();
+    return status === "completed" || status === "closed" || status === "resolved";
+  }
+
+  function canShowResolutionOptions(row) {
+    if (resolutionIsClosed(row)) return false;
+    if (row.needsResolution) return true;
+    if (row.rejectionReason) return true;
+    return (row.status || "").toLowerCase().indexOf("reject") !== -1;
+  }
+
+  function poFromNotification(note) {
+    var match = (note.message || "").match(/PO\s+([A-Z0-9-]+)/i);
+    return match ? match[1] : "";
+  }
+
+  function openRejectedDeliveryResolution(reference, poNumber) {
+    showScreen("delivery-history");
+    var filterEl = $("delivery-history-filter");
+    var searchEl = $("delivery-history-search");
+    if (filterEl) filterEl.value = "all";
+    if (searchEl) searchEl.value = poNumber || reference || "";
+    renderDeliveryHistory();
+    if (window.PortalNotifications && typeof window.PortalNotifications.close === "function") {
+      window.PortalNotifications.close();
+    }
+    window.requestAnimationFrame(function () {
+      var tbody = $("delivery-history-tbody");
+      if (!tbody) return;
+      tbody.querySelectorAll(".delivery-row-highlight").forEach(function (row) {
+        row.classList.remove("delivery-row-highlight");
+      });
+      var target = null;
+      if (poNumber) {
+        target = tbody.querySelector('tr[data-po-number="' + poNumber + '"]');
+      }
+      if (!target && reference) {
+        target = tbody.querySelector('tr[data-delivery-id="' + reference + '"]');
+        if (!target) {
+          tbody.querySelectorAll("tr[data-po-number]").forEach(function (row) {
+            var deliveryId = row.getAttribute("data-delivery-id") || "";
+            if (deliveryId === reference) target = row;
+          });
+        }
+      }
+      if (target) {
+        target.classList.add("delivery-row-highlight");
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
   }
 
   function renderDeliveryHistory() {
@@ -796,7 +850,7 @@
     }
     tbody.innerHTML = items.map(function (row) {
       var actions = "";
-      if ((row.status || "").toLowerCase().indexOf("reject") !== -1) {
+      if (canShowResolutionOptions(row)) {
         actions = '<div class="staff-table-actions">' +
           ['Redelivery', 'Replace Item', 'Refund', 'Contact Manager'].map(function (action) {
             return '<button type="button" class="staff-btn secondary compact resolve-delivery-btn" data-delivery-id="' + escapeHtml(row.deliveryId) + '" data-po-number="' + escapeHtml(row.poNumber) + '" data-action="' + escapeHtml(action) + '">' + escapeHtml(action) + '</button>';
@@ -804,12 +858,14 @@
           "</div>";
         if (row.rejectionReason) {
           actions = '<span class="staff-badge rejected">' + escapeHtml(row.rejectionReason) + "</span>" + actions;
+        } else if (row.resolutionAction) {
+          actions = '<span class="staff-badge warn">' + escapeHtml(row.resolutionAction) + " · " + escapeHtml(row.resolutionStatus || "In Progress") + "</span>" + actions;
         }
       } else {
         actions = escapeHtml(row.source === "local" ? "Local QR" : "System");
       }
       return (
-        "<tr>" +
+        "<tr data-delivery-id=\"" + escapeHtml(row.deliveryId) + "\" data-po-number=\"" + escapeHtml(row.poNumber) + "\">" +
         "<td>" + escapeHtml(row.deliveryId) + "</td>" +
         "<td>#" + escapeHtml(row.poNumber) + "</td>" +
         "<td>" + escapeHtml(row.itemName) + "</td>" +
@@ -1102,6 +1158,17 @@
     if (saveBtn) saveBtn.addEventListener("click", saveCatalogPrices);
   }
 
+  function setupNotificationActions() {
+    document.addEventListener("portal-notification-action", function (event) {
+      var note = event.detail || {};
+      var type = (note.eventType || "").toLowerCase();
+      var text = ((note.title || "") + " " + (note.message || "")).toLowerCase();
+      if (type === "delivery_rejected" || (type === "delivery_verified" && text.indexOf("rejected") !== -1)) {
+        openRejectedDeliveryResolution(note.reference || "", poFromNotification(note));
+      }
+    });
+  }
+
   function init() {
     if (window.PortalProfile) window.PortalProfile.loadHeaderProfile();
     setupNavigation();
@@ -1113,6 +1180,7 @@
     setupQrGenerator();
     setupSupportForm();
     setupCatalogPricing();
+    setupNotificationActions();
     window.PortalSync = { refresh: refreshData };
     refreshData();
     startLiveSync();

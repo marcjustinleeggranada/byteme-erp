@@ -1934,14 +1934,24 @@ def confirm_staff_delivery():
         f"{staff_user} recorded {status} for {order.item_name} ({delivery_id}).",
         delivery_id,
     )
-    create_notification(
-        "supplier",
-        order.supplier or "",
-        "delivery_verified",
-        "Delivery Verified",
-        f"Delivery {delivery_id} for PO {order.id} was marked {status}.",
-        delivery_id,
-    )
+    if status == "Rejected":
+        create_notification(
+            "supplier",
+            order.supplier or "",
+            "delivery_rejected",
+            "Delivery Rejected",
+            f"Delivery {delivery_id} for PO {order.id} was rejected. Open Delivery History to choose a resolution.",
+            delivery_id,
+        )
+    else:
+        create_notification(
+            "supplier",
+            order.supplier or "",
+            "delivery_verified",
+            "Delivery Verified",
+            f"Delivery {delivery_id} for PO {order.id} was marked {status}.",
+            delivery_id,
+        )
     db.session.commit()
     message = "Delivery verified and successfully delivered." if status == "Delivered" else f"Delivery recorded as {status}."
     return jsonify({"status": "success", "deliveryStatus": status, "message": message, "newStock": float(item.stock or 0) if item else None})
@@ -2356,6 +2366,9 @@ def supplier_deliveries():
     result = []
     for o in orders:
         receipt = receipts.get(o.id)
+        rejected_receipt = ReceivingRecord.query.filter_by(po_id=o.id, status="Rejected").order_by(
+            ReceivingRecord.id.desc()
+        ).first()
         shipment = find_active_shipment(po_id=o.id)
         open_resolution = DeliveryResolution.query.filter_by(po_id=o.id).order_by(
             DeliveryResolution.id.desc()
@@ -2366,6 +2379,8 @@ def supplier_deliveries():
         include = bool(receipt) or o.status in visible_statuses or (status or "").lower() == "rejected"
         if shipment and not receipt:
             include = True
+        if rejected_receipt:
+            include = True
         if include:
             if receipt and receipt.status in {"Delivered", "Partial"}:
                 display_id = receipt.delivery_id
@@ -2375,6 +2390,8 @@ def supplier_deliveries():
                 display_id = receipt.delivery_id
             else:
                 display_id = active_delivery_id_for_po(o.id)
+            resolved = open_resolution and open_resolution.status in {"Completed", "Closed", "Resolved"}
+            needs_resolution = bool(rejected_receipt) and not successful_receipt_for_po(o.id) and not resolved
             result.append({
                 "deliveryId": display_id,
                 "poNumber": o.id,
@@ -2383,9 +2400,10 @@ def supplier_deliveries():
                 "unit": o.unit,
                 "status": status,
                 "date": receipt.date_received if receipt else o.date,
-                "rejectionReason": receipt.rejection_reason if receipt else "",
+                "rejectionReason": rejected_receipt.rejection_reason if rejected_receipt else "",
                 "resolutionAction": (open_resolution.action if open_resolution else None) or (receipt.resolution_action if receipt else ""),
                 "resolutionStatus": (open_resolution.status if open_resolution else None) or (receipt.resolution_status if receipt else ""),
+                "needsResolution": needs_resolution,
             })
     return jsonify(result)
 
