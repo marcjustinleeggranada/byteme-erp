@@ -90,7 +90,12 @@ MANAGER_ACTIVITY_KEYWORDS = (
     "support", "ingredient", "inventory", "approved", "rejected", "registered", "restock",
 )
 STAFF_ACTIVITY_KEYWORDS = (
-    "stock", "adjustment", "purchase request", "delivery", "receiving", "inventory", "support",
+    "stock", "adjustment", "purchase request", "purchase order", "delivery",
+    "receiving", "inventory", "qr", "procurement", "low stock", "reject",
+    "delivered", "partial", "transit", "resolution", "support",
+)
+STAFF_ACTIVITY_EXCLUDED = (
+    "supplier registered", "user", "account", "system initialized",
 )
 
 # Database Tables
@@ -1638,6 +1643,7 @@ def reject_po():
 # ACTIVITY LOG
 def activity_log_payload(log):
     return {
+        "id": log.id,
         "event": log.event,
         "item": log.item,
         "reference": log.reference,
@@ -1645,12 +1651,54 @@ def activity_log_payload(log):
         "time": log.time,
     }
 
+def dedupe_activity_logs(logs, limit=20):
+    seen = set()
+    result = []
+    for log in logs:
+        key = (log.event, log.item, log.reference, log.status, log.time)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(activity_log_payload(log))
+        if len(result) >= limit:
+            break
+    return result
+
+def get_manager_activity_payload():
+    logs = ActivityLog.query.order_by(ActivityLog.id.desc()).limit(80).all()
+    return dedupe_activity_logs(logs, limit=30)
+
+def get_staff_activity_payload():
+    logs = ActivityLog.query.order_by(ActivityLog.id.desc()).limit(120).all()
+    seen = set()
+    result = []
+    for log in logs:
+        event_lower = (log.event or "").lower()
+        if any(excluded in event_lower for excluded in STAFF_ACTIVITY_EXCLUDED):
+            continue
+        hay = f"{log.event} {log.item} {log.reference} {log.status}".lower()
+        if not any(keyword in hay for keyword in STAFF_ACTIVITY_KEYWORDS):
+            continue
+        key = (log.event, log.item, log.reference, log.status, log.time)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(activity_log_payload(log))
+        if len(result) >= 20:
+            break
+    return result
+
 def get_role_filtered_activity(keywords):
     logs = ActivityLog.query.order_by(ActivityLog.id.desc()).limit(120).all()
     result = []
+    seen = set()
     for log in logs:
         event = (log.event or "").lower()
         if any(keyword in event for keyword in keywords):
+            key = (log.event, log.item, log.reference, log.status, log.time)
+            if key in seen:
+                continue
+            seen.add(key)
             result.append(activity_log_payload(log))
         if len(result) >= 20:
             break
@@ -1662,9 +1710,9 @@ def get_activity():
     if role == "supplier" and supplier_api_allowed():
         return jsonify(get_supplier_activity_payload())
     if role == "manager" and manager_api_allowed():
-        return jsonify(get_role_filtered_activity(MANAGER_ACTIVITY_KEYWORDS))
+        return jsonify(get_manager_activity_payload())
     if role == "staff" and staff_api_allowed():
-        return jsonify(get_role_filtered_activity(STAFF_ACTIVITY_KEYWORDS))
+        return jsonify(get_staff_activity_payload())
     return jsonify([])
 
 def get_supplier_activity_payload():
@@ -1678,27 +1726,46 @@ def get_supplier_activity_payload():
             catalog_items = {entry.get("itemName", "") for entry in json.loads(supplier.catalog)}
         except (TypeError, json.JSONDecodeError):
             catalog_items = set()
-    po_ids = {po.id for po in PurchaseOrder.query.filter_by(supplier=company).all()}
-    logs = ActivityLog.query.order_by(ActivityLog.id.desc()).limit(100).all()
+    po_records = PurchaseOrder.query.filter_by(supplier=company).all()
+    po_ids = {po.id for po in po_records}
+    item_names = {po.item_name for po in po_records}
+    delivery_ids = set()
+    for po in po_records:
+        delivery_ids.add(delivery_id_for_po(po.id))
+        for shipment in DeliveryRecord.query.filter_by(po_id=po.id).all():
+            if shipment.qr_value:
+                delivery_ids.add(shipment.qr_value)
+        for receipt in ReceivingRecord.query.filter_by(po_id=po.id).all():
+            if receipt.delivery_id:
+                delivery_ids.add(receipt.delivery_id)
+    resolution_ids = {
+        row.resolution_id for row in DeliveryResolution.query.filter_by(supplier=company).all()
+    }
+    company_lower = company.lower()
+    logs = ActivityLog.query.order_by(ActivityLog.id.desc()).limit(120).all()
+    seen = set()
     result = []
     for log in logs:
-        if log.item == company or log.item in catalog_items or log.reference in po_ids:
-            result.append({
-                "event": log.event,
-                "item": log.item,
-                "reference": log.reference,
-                "status": log.status,
-                "time": log.time,
-            })
-        elif company.lower() in (log.event or "").lower():
-            result.append({
-                "event": log.event,
-                "item": log.item,
-                "reference": log.reference,
-                "status": log.status,
-                "time": log.time,
-            })
-    return result[:20]
+        hay = f"{log.event} {log.item} {log.reference} {log.status}".lower()
+        matches = (
+            log.item == company
+            or log.item in catalog_items
+            or log.item in item_names
+            or log.reference in po_ids
+            or log.reference in delivery_ids
+            or log.reference in resolution_ids
+            or company_lower in hay
+        )
+        if not matches:
+            continue
+        key = (log.event, log.item, log.reference, log.status, log.time)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(activity_log_payload(log))
+        if len(result) >= 20:
+            break
+    return result
 
 @app.route("/api/activity/add",methods=["POST"])
 def add_activity():
