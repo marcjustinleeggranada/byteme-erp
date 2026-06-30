@@ -2023,20 +2023,16 @@ td {
 .staff-title-wrap { min-width: 0; flex: 1 1 220px; }
 .staff-title-wrap h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .staff-topbar-actions { flex: 0 1 auto; max-width: 100%; }
-.portal-notification-panel { width: min(340px, calc(100vw - 32px)); }
-.staff-content { max-width: 100%; overflow-x: hidden; }
-.staff-table-card { max-width: 100%; -webkit-overflow-scrolling: touch; }
-.staff-kpi-grid { width: 100%; }
-.staff-kpi-grid, .staff-card, .staff-kpi { position:relative; z-index:1; }
-.portal-notifications-wrap { position:relative; z-index:500; }
+.staff-user { position: relative; z-index: 9000; }
+.portal-notifications-wrap { position: relative; z-index: 9000; isolation: isolate; }
 .portal-notification-button { position:relative; width:36px; height:36px; display:grid; place-items:center; border:1px solid var(--line); border-radius:9px; background:#fff; color:var(--sage-900); cursor:pointer; }
 .portal-notification-button:hover { background:var(--sage-50); }
 #portal-notification-count { position:absolute; top:-4px; right:-4px; min-width:16px; height:16px; padding:0 4px; border-radius:999px; background:var(--danger); color:#fff; font-size:9px; font-weight:700; display:grid; place-items:center; }
-.portal-notification-panel { position:absolute; right:0; top:calc(100% + 8px); width:min(340px,90vw); max-height:min(360px,70vh); display:flex; flex-direction:column; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:0 18px 40px rgba(20,35,28,.16); z-index:10000; }
+.portal-notification-panel { position:fixed; width:min(340px,calc(100vw - 32px)); max-height:min(480px,calc(100vh - 32px)); display:flex; flex-direction:column; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:0 18px 40px rgba(20,35,28,.22); z-index:99999; }
 .portal-notification-panel[hidden] { display: none !important; }
-.portal-notification-header { flex:0 0 auto; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px 14px; border-bottom:1px solid var(--line); }
+.portal-notification-header { flex:0 0 auto; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px 14px; border-bottom:1px solid var(--line); background:#fff; position:sticky; top:0; z-index:2; }
 .portal-notification-header button { border:0; background:transparent; color:var(--sage-700); font-size:10px; font-weight:650; cursor:pointer; }
-.portal-notification-list { flex:1 1 auto; min-height:0; max-height:min(300px,calc(70vh - 52px)); overflow-y:auto; overflow-x:hidden; padding:8px; -webkit-overflow-scrolling:touch; }
+.portal-notification-list { flex:1 1 auto; min-height:0; max-height:480px; overflow-y:auto; overflow-x:hidden; padding:8px; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
 .notification-item { width:100%; display:flex; flex-direction:column; gap:4px; padding:10px 12px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; }
 .notification-item:hover { background:var(--sage-50); }
 .notification-item.unread { background:#fff8eb; }
@@ -2044,6 +2040,15 @@ td {
 .notification-item span { font-size:10px; color:var(--muted); line-height:1.45; }
 .notification-item small { font-size:9px; color:#98a39a; }
 .notification-empty { padding:18px 12px; color:var(--muted); font-size:10px; text-align:center; }
+.staff-content { max-width: 100%; overflow-x: hidden; }
+.staff-table-card { max-width: 100%; -webkit-overflow-scrolling: touch; }
+.staff-kpi-grid { width: 100%; }
+.staff-kpi-grid, .staff-card, .staff-kpi { position:relative; z-index:1; }
+.resolution-feedback { display:flex; flex-direction:column; gap:6px; margin-bottom:8px; max-width:100%; }
+.resolution-feedback .resolution-note { font-size:10px; color:var(--ink); line-height:1.45; word-break:break-word; }
+.resolution-feedback .resolution-updated { font-size:9px; color:var(--muted); }
+.resolve-delivery-btn.locked-selected { border-color:var(--sage-900); background:var(--sage-50); color:var(--sage-900); opacity:1; }
+.resolve-delivery-btn[disabled]:not(.locked-selected) { opacity:.45; cursor:not-allowed; }
 
 /* ===== Legacy delivery scanner (merged from staff-delivery.css) ===== */
 #qr-reader-container {

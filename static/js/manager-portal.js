@@ -630,11 +630,7 @@
   }
 
   function resolutionStatusOptions(record) {
-    var base = ["Open", "In Progress", "Completed", "Closed", "Resolved"];
-    if (record.action === "Refund") {
-      base = ["Refund Pending", "Refund in Progress", "Completed", "Closed", "Resolved"];
-    }
-    return base;
+    return ["Pending Manager Review", "Approved", "Rejected", "Completed", "Reopened"];
   }
 
   function renderDeliveryResolutions() {
@@ -649,7 +645,8 @@
       var statusSelect =
         '<select class="resolution-status-select" data-resolution-id="' + r.id + '" style="padding:6px 8px;border:1px solid var(--line);border-radius:7px;font-size:10px;min-width:120px">' +
         options.map(function (status) {
-          return '<option value="' + escapeHtml(status) + '"' + (r.status === status ? " selected" : "") + ">" + escapeHtml(status) + "</option>";
+          var selected = (r.status === status) || (r.supplierResolutionStatus === status);
+          return '<option value="' + escapeHtml(status) + '"' + (selected ? " selected" : "") + ">" + escapeHtml(status) + "</option>";
         }).join("") +
         "</select>";
       var noteInput =

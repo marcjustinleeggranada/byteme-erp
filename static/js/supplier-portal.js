@@ -759,6 +759,10 @@
         rejectionReason: d.rejectionReason || "",
         resolutionAction: d.resolutionAction || "",
         resolutionStatus: d.resolutionStatus || "",
+        supplierResolutionStatus: d.supplierResolutionStatus || "",
+        managerNote: d.managerNote || "",
+        managerUpdatedAt: d.managerUpdatedAt || "",
+        resolutionLocked: !!d.resolutionLocked,
         needsResolution: !!d.needsResolution,
         source: "server"
       };
@@ -777,15 +781,69 @@
   }
 
   function resolutionIsClosed(row) {
-    var status = (row.resolutionStatus || "").toLowerCase();
-    return status === "completed" || status === "closed" || status === "resolved";
+    var status = (row.supplierResolutionStatus || row.resolutionStatus || "").toLowerCase();
+    return status === "completed" || status === "rejected" || status === "closed" || status === "resolved";
   }
 
   function canShowResolutionOptions(row) {
+    if (row.resolutionLocked) return false;
     if (resolutionIsClosed(row)) return false;
     if (row.needsResolution) return true;
     if (row.rejectionReason) return true;
     return (row.status || "").toLowerCase().indexOf("reject") !== -1;
+  }
+
+  function resolutionFeedbackHtml(row) {
+    var parts = [];
+    if (row.rejectionReason) {
+      parts.push('<span class="staff-badge rejected">' + escapeHtml(row.rejectionReason) + "</span>");
+    }
+    var label = row.supplierResolutionStatus || row.resolutionStatus;
+    if (label) {
+      parts.push('<span class="staff-badge warn">' + escapeHtml(label) + "</span>");
+    }
+    if (row.managerNote) {
+      parts.push('<span class="resolution-note">' + escapeHtml(row.managerNote) + "</span>");
+    }
+    if (row.managerUpdatedAt) {
+      parts.push('<small class="resolution-updated">' + escapeHtml(row.managerUpdatedAt) + "</small>");
+    }
+    return parts.length ? '<div class="resolution-feedback">' + parts.join("") + "</div>" : "";
+  }
+
+  function buildResolutionActions(row, locked) {
+    var selected = row.resolutionAction || "";
+    var buttons = ["Redelivery", "Replace Item", "Refund", "Contact Manager"].map(function (action) {
+      var isSelected = action === selected;
+      var disabled = locked ? " disabled" : "";
+      var cls = "staff-btn secondary compact resolve-delivery-btn";
+      if (locked && isSelected) cls += " locked-selected";
+      return '<button type="button" class="' + cls + '"' + disabled +
+        ' data-delivery-id="' + escapeHtml(row.deliveryId) + '"' +
+        ' data-po-number="' + escapeHtml(row.poNumber) + '"' +
+        ' data-action="' + escapeHtml(action) + '">' + escapeHtml(action) + "</button>";
+    }).join("");
+    return resolutionFeedbackHtml(row) + '<div class="staff-table-actions">' + buttons + "</div>";
+  }
+
+  function submitResolution(deliveryId, poNumber, action) {
+    apiFetch("/api/supplier/deliveries/resolve", {
+      method: "POST",
+      body: JSON.stringify({
+        deliveryId: deliveryId,
+        poNumber: poNumber,
+        action: action,
+      }),
+    }).then(function (result) {
+      var msg = "Resolution request submitted.";
+      if (result && result.newDeliveryId) {
+        msg += " New Delivery ID: " + result.newDeliveryId + ". Generate a QR code to continue.";
+      }
+      showToast(msg);
+      return refreshData();
+    }).catch(function (err) {
+      showToast(err.message || "Could not submit resolution.", "error");
+    });
   }
 
   function poFromNotification(note) {
@@ -812,6 +870,9 @@
       var target = null;
       if (poNumber) {
         target = tbody.querySelector('tr[data-po-number="' + poNumber + '"]');
+      }
+      if (!target && reference) {
+        target = tbody.querySelector('tr[data-resolution-id="' + reference + '"]');
       }
       if (!target && reference) {
         target = tbody.querySelector('tr[data-delivery-id="' + reference + '"]');
@@ -850,22 +911,18 @@
     }
     tbody.innerHTML = items.map(function (row) {
       var actions = "";
-      if (canShowResolutionOptions(row)) {
-        actions = '<div class="staff-table-actions">' +
-          ['Redelivery', 'Replace Item', 'Refund', 'Contact Manager'].map(function (action) {
-            return '<button type="button" class="staff-btn secondary compact resolve-delivery-btn" data-delivery-id="' + escapeHtml(row.deliveryId) + '" data-po-number="' + escapeHtml(row.poNumber) + '" data-action="' + escapeHtml(action) + '">' + escapeHtml(action) + '</button>';
-          }).join("") +
-          "</div>";
-        if (row.rejectionReason) {
-          actions = '<span class="staff-badge rejected">' + escapeHtml(row.rejectionReason) + "</span>" + actions;
-        } else if (row.resolutionAction) {
-          actions = '<span class="staff-badge warn">' + escapeHtml(row.resolutionAction) + " · " + escapeHtml(row.resolutionStatus || "In Progress") + "</span>" + actions;
-        }
+      if (row.resolutionLocked && row.resolutionAction) {
+        actions = buildResolutionActions(row, true);
+      } else if (canShowResolutionOptions(row)) {
+        actions = buildResolutionActions(row, false);
+      } else if (row.resolutionAction || row.supplierResolutionStatus) {
+        actions = resolutionFeedbackHtml(row) || escapeHtml(row.source === "local" ? "Local QR" : "System");
       } else {
         actions = escapeHtml(row.source === "local" ? "Local QR" : "System");
       }
       return (
-        "<tr data-delivery-id=\"" + escapeHtml(row.deliveryId) + "\" data-po-number=\"" + escapeHtml(row.poNumber) + "\">" +
+        "<tr data-delivery-id=\"" + escapeHtml(row.deliveryId) + "\" data-po-number=\"" + escapeHtml(row.poNumber) + "\"" +
+        (row.resolutionId ? " data-resolution-id=\"" + escapeHtml(row.resolutionId) + "\"" : "") + ">" +
         "<td>" + escapeHtml(row.deliveryId) + "</td>" +
         "<td>#" + escapeHtml(row.poNumber) + "</td>" +
         "<td>" + escapeHtml(row.itemName) + "</td>" +
@@ -877,25 +934,18 @@
       );
     }).join("");
 
-    tbody.querySelectorAll(".resolve-delivery-btn").forEach(function (btn) {
+    tbody.querySelectorAll(".resolve-delivery-btn:not([disabled])").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        apiFetch("/api/supplier/deliveries/resolve", {
-          method: "POST",
-          body: JSON.stringify({
-            deliveryId: btn.getAttribute("data-delivery-id"),
-            poNumber: btn.getAttribute("data-po-number"),
-            action: btn.getAttribute("data-action"),
-          }),
-        }).then(function (result) {
-          var msg = "Resolution request submitted.";
-          if (result && result.newDeliveryId) {
-            msg += " New Delivery ID: " + result.newDeliveryId + ". Generate a QR code to continue.";
+        var deliveryId = btn.getAttribute("data-delivery-id");
+        var poNumber = btn.getAttribute("data-po-number");
+        var action = btn.getAttribute("data-action");
+        showConfirmModal(
+          "Confirm Delivery Resolution",
+          "Are you sure you want to submit this delivery resolution? This request cannot be modified while waiting for the Manager's decision.",
+          function () {
+            submitResolution(deliveryId, poNumber, action);
           }
-          showToast(msg);
-          return refreshData();
-        }).catch(function (err) {
-          showToast(err.message || "Could not submit resolution.", "error");
-        });
+        );
       });
     });
   }
@@ -1164,6 +1214,8 @@
       var type = (note.eventType || "").toLowerCase();
       var text = ((note.title || "") + " " + (note.message || "")).toLowerCase();
       if (type === "delivery_rejected" || (type === "delivery_verified" && text.indexOf("rejected") !== -1)) {
+        openRejectedDeliveryResolution(note.reference || "", poFromNotification(note));
+      } else if (type === "delivery_resolution_update") {
         openRejectedDeliveryResolution(note.reference || "", poFromNotification(note));
       }
     });

@@ -447,7 +447,7 @@ def active_delivery_id_for_po(po_id):
         return shipment.qr_value
     resolution = DeliveryResolution.query.filter_by(po_id=po_id).filter(
         DeliveryResolution.new_delivery_id.isnot(None),
-        DeliveryResolution.status.in_(["In Progress", "Open"]),
+        DeliveryResolution.status.in_(["In Progress", "Open", "Pending Manager Review", "Approved"]),
     ).order_by(DeliveryResolution.id.desc()).first()
     if resolution and resolution.new_delivery_id:
         return resolution.new_delivery_id
@@ -466,9 +466,48 @@ def resolution_payload(record):
         "unit": record.unit or "",
         "action": record.action,
         "status": record.status,
+        "supplierResolutionStatus": normalize_resolution_status(record.status),
         "rejectionReason": record.rejection_reason or "",
         "managerNote": record.manager_note or "",
+        "managerUpdatedAt": record.updated_at.strftime("%B %d, %Y · %I:%M %p") if record.updated_at else "",
         "date": record.created_at.strftime("%B %d, %Y · %I:%M %p") if record.created_at else "",
+        "resolutionLocked": resolution_is_locked(record),
+    }
+
+def normalize_resolution_status(status):
+    if not status:
+        return ""
+    legacy_map = {
+        "Open": "Pending Manager Review",
+        "In Progress": "Pending Manager Review",
+        "Refund Pending": "Pending Manager Review",
+        "Refund in Progress": "Pending Manager Review",
+        "Closed": "Completed",
+        "Resolved": "Completed",
+    }
+    return legacy_map.get(status, status)
+
+def resolution_is_locked(record):
+    if not record:
+        return False
+    label = normalize_resolution_status(record.status)
+    return label not in {"Completed", "Rejected", "Reopened"}
+
+def supplier_resolution_fields(record):
+    if not record:
+        return {
+            "managerNote": "",
+            "managerUpdatedAt": "",
+            "supplierResolutionStatus": "",
+            "resolutionLocked": False,
+            "resolutionId": "",
+        }
+    return {
+        "managerNote": record.manager_note or "",
+        "managerUpdatedAt": record.updated_at.strftime("%B %d, %Y · %I:%M %p") if record.updated_at else "",
+        "supplierResolutionStatus": normalize_resolution_status(record.status),
+        "resolutionLocked": resolution_is_locked(record),
+        "resolutionId": record.resolution_id,
     }
 
 def find_order_for_delivery_lookup(delivery_id):
@@ -1920,7 +1959,7 @@ def confirm_staff_delivery():
         db.session.add(DeliveryRecord(qr_value=delivery_id, po_id=order.id, status=status, time=datetime.now().strftime("%H:%M")))
     if status in {"Delivered", "Partial"}:
         for resolution in DeliveryResolution.query.filter_by(po_id=order.id).filter(
-            DeliveryResolution.status.in_(["In Progress", "Open"])
+            DeliveryResolution.status.in_(["In Progress", "Open", "Pending Manager Review", "Approved"])
         ).all():
             if resolution.action in {"Redelivery", "Replace Item", "Contact Manager"}:
                 resolution.status = "Completed"
@@ -2249,24 +2288,28 @@ def update_delivery_resolution():
     record = DeliveryResolution.query.get(data.get("id"))
     status = str(data.get("status", "")).strip()
     allowed = {
-        "Open", "In Progress", "Refund Pending", "Refund in Progress",
-        "Completed", "Closed", "Resolved",
+        "Pending Manager Review", "Approved", "Rejected", "Completed", "Reopened",
+        "Open", "In Progress", "Refund Pending", "Refund in Progress", "Closed", "Resolved",
     }
     if not record or status not in allowed:
         return jsonify({"error": "Invalid resolution update."}), 400
-    record.status = status
+    record.status = normalize_resolution_status(status) if status in {
+        "Open", "In Progress", "Refund Pending", "Refund in Progress", "Closed", "Resolved",
+    } else status
     record.manager_note = str(data.get("note", record.manager_note or "")).strip()
     record.updated_at = datetime.now()
-    if record.action == "Refund" and status in {"Completed", "Closed", "Resolved"}:
+    if record.action == "Refund" and record.status in {"Completed", "Closed", "Resolved"}:
         po = PurchaseOrder.query.get(record.po_id)
         if po:
             po.status = "Refund Resolved"
+    feedback_at = record.updated_at.strftime("%B %d, %Y · %I:%M %p")
+    note_text = record.manager_note or "No remarks provided."
     create_notification(
         "supplier",
         record.supplier,
         "delivery_resolution_update",
         "Delivery Resolution Updated",
-        f"Manager updated {record.resolution_id} to {status}.",
+        f"Manager set {record.resolution_id} to {record.status}. Remarks: {note_text} · {feedback_at}",
         record.resolution_id,
     )
     db.session.commit()
@@ -2307,7 +2350,7 @@ def supplier_generate_qr():
         return jsonify({"error": "Purchase order not found or not assigned to your company."}), 404
     open_redelivery = DeliveryResolution.query.filter_by(po_id=po.id).filter(
         DeliveryResolution.action.in_(["Redelivery", "Replace Item"]),
-        DeliveryResolution.status.in_(["In Progress", "Open"]),
+        DeliveryResolution.status.in_(["In Progress", "Open", "Pending Manager Review", "Approved", "Reopened"]),
     ).first()
     if po.status not in {"Accepted", "In Transit"} and not open_redelivery:
         return jsonify({"error": "Generate a QR code only after accepting the purchase order or starting a redelivery."}), 400
@@ -2390,8 +2433,11 @@ def supplier_deliveries():
                 display_id = receipt.delivery_id
             else:
                 display_id = active_delivery_id_for_po(o.id)
-            resolved = open_resolution and open_resolution.status in {"Completed", "Closed", "Resolved"}
+            resolved = open_resolution and normalize_resolution_status(open_resolution.status) in {"Completed", "Rejected"}
             needs_resolution = bool(rejected_receipt) and not successful_receipt_for_po(o.id) and not resolved
+            if open_resolution and normalize_resolution_status(open_resolution.status) == "Reopened":
+                needs_resolution = bool(rejected_receipt) and not successful_receipt_for_po(o.id)
+            fields = supplier_resolution_fields(open_resolution)
             result.append({
                 "deliveryId": display_id,
                 "poNumber": o.id,
@@ -2403,6 +2449,11 @@ def supplier_deliveries():
                 "rejectionReason": rejected_receipt.rejection_reason if rejected_receipt else "",
                 "resolutionAction": (open_resolution.action if open_resolution else None) or (receipt.resolution_action if receipt else ""),
                 "resolutionStatus": (open_resolution.status if open_resolution else None) or (receipt.resolution_status if receipt else ""),
+                "supplierResolutionStatus": fields["supplierResolutionStatus"],
+                "managerNote": fields["managerNote"],
+                "managerUpdatedAt": fields["managerUpdatedAt"],
+                "resolutionLocked": fields["resolutionLocked"],
+                "resolutionId": fields["resolutionId"],
                 "needsResolution": needs_resolution,
             })
     return jsonify(result)
@@ -2427,14 +2478,16 @@ def supplier_resolve_delivery():
     if receipt and receipt.status != "Rejected" and action in {"Redelivery", "Replace Item", "Refund"}:
         return jsonify({"error": "Resolution is only available for rejected deliveries."}), 400
 
+    existing = DeliveryResolution.query.filter_by(po_id=po.id).order_by(DeliveryResolution.id.desc()).first()
+    if existing and resolution_is_locked(existing):
+        return jsonify({"error": "A resolution request is already pending manager review."}), 409
+
     resolution_id = f"RES-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     new_delivery_id = None
+    status = "Pending Manager Review"
     if action == "Refund":
-        status = "Refund Pending"
-    elif action == "Contact Manager":
-        status = "Open"
-    else:
-        status = "In Progress"
+        pass
+    elif action in {"Redelivery", "Replace Item"}:
         new_delivery_id = new_delivery_id_for_po(po.id)
         shipment_status = "Pending Redelivery" if action == "Redelivery" else "Pending Replacement"
         po.status = "In Transit"
@@ -2446,20 +2499,30 @@ def supplier_resolve_delivery():
             resolution_id=resolution_id,
         ))
 
-    resolution = DeliveryResolution(
-        resolution_id=resolution_id,
-        po_id=po.id,
-        original_delivery_id=receipt.delivery_id if receipt else delivery_id_for_po(po.id),
-        new_delivery_id=new_delivery_id,
-        supplier=company,
-        item_name=po.item_name,
-        quantity=float(po.qty or 0),
-        unit=po.unit,
-        action=action,
-        status=status,
-        rejection_reason=receipt.rejection_reason if receipt else "",
-    )
-    db.session.add(resolution)
+    if existing and normalize_resolution_status(existing.status) == "Reopened":
+        resolution = existing
+        resolution.resolution_id = resolution_id
+        resolution.original_delivery_id = receipt.delivery_id if receipt else delivery_id_for_po(po.id)
+        resolution.new_delivery_id = new_delivery_id
+        resolution.action = action
+        resolution.status = status
+        resolution.rejection_reason = receipt.rejection_reason if receipt else resolution.rejection_reason
+        resolution.updated_at = datetime.now()
+    else:
+        resolution = DeliveryResolution(
+            resolution_id=resolution_id,
+            po_id=po.id,
+            original_delivery_id=receipt.delivery_id if receipt else delivery_id_for_po(po.id),
+            new_delivery_id=new_delivery_id,
+            supplier=company,
+            item_name=po.item_name,
+            quantity=float(po.qty or 0),
+            unit=po.unit,
+            action=action,
+            status=status,
+            rejection_reason=receipt.rejection_reason if receipt else "",
+        )
+        db.session.add(resolution)
     if receipt:
         receipt.resolution_action = action
         receipt.resolution_status = status

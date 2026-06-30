@@ -89,14 +89,37 @@
     var button = $("portal-notification-button");
     var panel = $("portal-notification-panel");
     if (!button || !panel || panel.hidden) return;
-    var rect = button.getBoundingClientRect();
-    var panelWidth = panel.offsetWidth || 340;
-    var left = Math.max(16, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 16));
+
+    panel.style.visibility = "hidden";
+    panel.style.display = "flex";
     panel.style.position = "fixed";
-    panel.style.top = Math.round(rect.bottom + 8) + "px";
-    panel.style.left = Math.round(left) + "px";
     panel.style.right = "auto";
-    panel.style.zIndex = "10000";
+
+    var rect = button.getBoundingClientRect();
+    var panelWidth = Math.min(340, window.innerWidth - 32);
+    var maxPanelHeight = Math.min(480, window.innerHeight - 32);
+    panel.style.width = panelWidth + "px";
+    panel.style.maxHeight = maxPanelHeight + "px";
+
+    var panelHeight = panel.offsetHeight || maxPanelHeight;
+    var gap = 8;
+    var left = Math.max(16, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 16));
+    var top = rect.bottom + gap;
+
+    if (top + panelHeight > window.innerHeight - 16) {
+      top = rect.top - panelHeight - gap;
+    }
+    if (top < 16) {
+      top = 16;
+    }
+    if (top + panelHeight > window.innerHeight - 16) {
+      panel.style.maxHeight = Math.max(180, window.innerHeight - top - 16) + "px";
+    }
+
+    panel.style.top = Math.round(top) + "px";
+    panel.style.left = Math.round(left) + "px";
+    panel.style.zIndex = "99999";
+    panel.style.visibility = "visible";
   }
 
   function togglePanel(event) {
@@ -115,6 +138,11 @@
       panel.style.top = "";
       panel.style.left = "";
       panel.style.right = "";
+      panel.style.width = "";
+      panel.style.maxHeight = "";
+      panel.style.visibility = "";
+      panel.style.display = "";
+      panel.style.zIndex = "";
     }
   }
 
@@ -173,6 +201,9 @@
     }
     document.addEventListener("click", function (event) {
       if (!event.target.closest(".portal-notifications-wrap")) closePanel();
+      if (event.target.closest("[data-screen], .staff-menu-button, .staff-modal-close, .staff-link-button")) {
+        closePanel();
+      }
     });
     window.addEventListener("resize", positionPanel);
     window.addEventListener("scroll", positionPanel, true);
