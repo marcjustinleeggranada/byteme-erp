@@ -13,11 +13,27 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "super_secret_session_key")
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///procurement.db"
-elif DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+def resolve_database_url():
+    configured = os.environ.get("DATABASE_URL", "").strip()
+    if configured:
+        if configured.startswith("postgres://"):
+            configured = configured.replace("postgres://", "postgresql://", 1)
+        return configured
+    app_dir = os.path.abspath(os.path.dirname(__file__))
+    instance_dir = os.path.join(app_dir, "instance")
+    os.makedirs(instance_dir, exist_ok=True)
+    instance_db = os.path.join(instance_dir, "procurement.db")
+    legacy_db = os.path.join(app_dir, "procurement.db")
+    if os.path.exists(legacy_db) and not os.path.exists(instance_db):
+        try:
+            import shutil
+            shutil.copy2(legacy_db, instance_db)
+        except OSError:
+            pass
+    db_path = instance_db if os.path.exists(instance_db) else legacy_db if os.path.exists(legacy_db) else instance_db
+    return "sqlite:///" + db_path.replace("\\", "/")
+
+DATABASE_URL = resolve_database_url()
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -657,9 +673,18 @@ def check_and_auto_purchase_request(item_id, requested_by=None):
     ))
     return record
 
+def database_has_application_data():
+    return bool(
+        User.query.first()
+        or Supplier.query.first()
+        or Inventory.query.first()
+        or PurchaseOrder.query.first()
+        or PurchaseRequest.query.first()
+    )
+
 def seed_demo_data():
     """Populate sample suppliers, inventory, POs, and activity for first-run demos."""
-    if Inventory.query.first():
+    if database_has_application_data():
         return
 
     suppliers = [
