@@ -1110,6 +1110,21 @@ def sync_supplier_catalog_price(supplier_name, item_name, price):
         catalog.append({"itemName": item_name, "price": float(price)})
     supplier.catalog = json.dumps(catalog)
 
+def rename_supplier_catalog_item(old_supplier_name, old_item_name, new_supplier_name, new_item_name, price=None):
+    old_supplier = Supplier.query.filter_by(name=old_supplier_name).first()
+    catalog_price = float(price) if price is not None else get_supplier_price(old_supplier_name, old_item_name)
+    if old_supplier and old_supplier.catalog:
+        try:
+            catalog = json.loads(old_supplier.catalog or "[]")
+            catalog = [
+                entry for entry in catalog
+                if entry.get("itemName", "").lower() != old_item_name.lower()
+            ]
+            old_supplier.catalog = json.dumps(catalog)
+        except (TypeError, json.JSONDecodeError):
+            pass
+    sync_supplier_catalog_price(new_supplier_name, new_item_name, catalog_price)
+
 def add_catalog_items_to_inventory(supplier_name, catalog, default_stock=0):
     for entry in catalog or []:
         item_name = str(entry.get("itemName", "")).strip()
@@ -1482,22 +1497,59 @@ def update_inventory():
     item = Inventory.query.get(data.get("id"))
     if not item:
         return jsonify({"status": "error", "message": "Item not found"}), 404
+    old_name = item.name
+    old_supplier = item.supplier_name
+    catalog_price = None
+    if "price" in data:
+        try:
+            catalog_price = float(data.get("price"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Enter a valid price."}), 400
+    if "name" in data:
+        new_name = str(data.get("name", "")).strip()
+        if not new_name:
+            return jsonify({"error": "Ingredient name is required."}), 400
+        if new_name.lower() != item.name.lower():
+            duplicate = Inventory.query.filter(
+                db.func.lower(Inventory.name) == new_name.lower(),
+                Inventory.id != item.id,
+            ).first()
+            if duplicate:
+                return jsonify({"error": "An ingredient with that name already exists."}), 409
+            item.name = new_name
+    if "supplier" in data:
+        supplier = str(data.get("supplier", "")).strip()
+        if not supplier:
+            return jsonify({"error": "Supplier is required."}), 400
+        item.supplier_name = supplier
+    if "unit" in data:
+        unit = str(data.get("unit", "") or "").strip()
+        if unit:
+            item.unit = unit
     if "threshold" in data:
         try:
             item.threshold = float(data.get("threshold", item.threshold))
         except (TypeError, ValueError):
             return jsonify({"error": "Enter a valid threshold."}), 400
-    if "price" in data:
-        try:
-            price = float(data.get("price"))
-            sync_supplier_catalog_price(item.supplier_name, item.name, price)
-        except (TypeError, ValueError):
-            return jsonify({"error": "Enter a valid price."}), 400
     if "stock" in data:
         try:
             item.stock = float(data.get("stock", item.stock))
         except (TypeError, ValueError):
             return jsonify({"error": "Enter a valid stock level."}), 400
+    name_or_supplier_changed = (
+        old_name.lower() != item.name.lower()
+        or normalize_supplier_name(old_supplier) != normalize_supplier_name(item.supplier_name)
+    )
+    if name_or_supplier_changed:
+        rename_supplier_catalog_item(
+            old_supplier,
+            old_name,
+            item.supplier_name,
+            item.name,
+            catalog_price,
+        )
+    elif catalog_price is not None:
+        sync_supplier_catalog_price(item.supplier_name, item.name, catalog_price)
     db.session.commit()
     check_and_auto_purchase_request(item.id, requested_by="staff")
     db.session.commit()

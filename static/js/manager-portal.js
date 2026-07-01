@@ -916,13 +916,13 @@
     populateIngredientSupplierSelect();
     $("ingredient-edit-id").value = item ? item.id : "";
     $("ingredient-name").value = item ? item.name : "";
-    $("ingredient-name").readOnly = !!item;
+    $("ingredient-name").readOnly = false;
     $("ingredient-supplier").value = item ? (item.supplier || "") : "";
     $("ingredient-price").value = item ? (item.price || "") : "";
     $("ingredient-threshold").value = item ? (item.threshold || "") : "";
     $("ingredient-unit").value = item ? (item.unit || "kg") : "kg";
     $("ingredient-stock").value = item ? (item.stock || 0) : 0;
-    $("ingredient-stock").readOnly = !!item;
+    $("ingredient-stock").readOnly = false;
     $("ingredient-modal-title").textContent = item ? "Edit Ingredient" : "Add Ingredient";
     modal.hidden = false;
   }
@@ -938,9 +938,17 @@
     if (editId) {
       payload = {
         id: Number(editId),
+        name: ($("ingredient-name") && $("ingredient-name").value || "").trim(),
+        supplier: ($("ingredient-supplier") && $("ingredient-supplier").value || "").trim(),
         threshold: parseFloat($("ingredient-threshold") && $("ingredient-threshold").value) || 0,
         price: parseFloat($("ingredient-price") && $("ingredient-price").value) || 0,
+        unit: ($("ingredient-unit") && $("ingredient-unit").value || "kg").trim() || "kg",
+        stock: parseFloat($("ingredient-stock") && $("ingredient-stock").value) || 0,
       };
+      if (!payload.name || !payload.supplier) {
+        showToast("Enter ingredient name and supplier.", "error");
+        return;
+      }
       apiFetch("/api/inventory/update", { method: "POST", body: JSON.stringify(payload) })
         .then(function () {
           closeIngredientModal();
