@@ -2,5 +2,7 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
   "python.terminal.activateEnvironment": true,
   "python.analysis.diagnosticMode": "workspace",
+  "python.analysis.typeCheckingMode": "off",
+  "basedpyright.analysis.typeCheckingMode": "off",
   "python.analysis.useLibraryCodeForTypes": true
 }
