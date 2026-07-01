@@ -85,10 +85,19 @@
       .then(loadNotifications);
   }
 
+  function ensurePanelInBody() {
+    var panel = $("portal-notification-panel");
+    if (panel && panel.parentElement !== document.body) {
+      document.body.appendChild(panel);
+    }
+  }
+
   function positionPanel() {
     var button = $("portal-notification-button");
     var panel = $("portal-notification-panel");
     if (!button || !panel || panel.hidden) return;
+
+    ensurePanelInBody();
 
     panel.style.visibility = "hidden";
     panel.style.display = "flex";
@@ -118,7 +127,7 @@
 
     panel.style.top = Math.round(top) + "px";
     panel.style.left = Math.round(left) + "px";
-    panel.style.zIndex = "99999";
+    panel.style.zIndex = "10050";
     panel.style.visibility = "visible";
   }
 
