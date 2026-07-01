@@ -1637,7 +1637,8 @@ button,input,select,textarea { font:inherit; }
 .staff-subnav { display:none; padding:3px 0 7px 55px; }
 .staff-nav-group.open .staff-subnav { display:block; }
 .staff-subnav button { width:100%; padding:8px 12px; border:0; border-left:1px solid var(--line); background:transparent; color:var(--muted); font-size:11px; text-align:left; cursor:pointer; }
-.staff-subnav button:hover,.staff-subnav button.active { border-left-color:var(--sage-700); color:var(--sage-900); font-weight:600; }
+.staff-subnav a { display:block; width:100%; padding:8px 12px; border-left:1px solid var(--line); background:transparent; color:var(--muted); font-size:11px; text-align:left; text-decoration:none; }
+.staff-subnav button:hover,.staff-subnav button.active,.staff-subnav a:hover { border-left-color:var(--sage-700); color:var(--sage-900); font-weight:600; }
 .staff-sidebar-footer { padding:10px 0 14px; border-top:1px solid var(--line); }
 .sidebar-collapsed .staff-sidebar { width:76px; }
 .sidebar-collapsed .staff-brand { justify-content:center; padding:18px; }

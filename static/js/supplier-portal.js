@@ -494,12 +494,10 @@
   }
 
   function setupNavGroups() {
-    document.querySelectorAll(".staff-nav-group .group-toggle").forEach(function (toggle) {
-      toggle.addEventListener("click", function () {
-        var group = toggle.closest(".staff-nav-group");
-        if (group) group.classList.toggle("open");
-      });
-    });
+    if (window.PortalSidebar) {
+      window.PortalSidebar.setupNavGroups();
+      window.PortalSidebar.setupSettingsFooter();
+    }
   }
 
   function setupMobileNav() {
