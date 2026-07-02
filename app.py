@@ -124,9 +124,14 @@ class User(db.Model):
     password_changed_at = db.Column(db.DateTime, nullable=True)
 
 FIXED_MANAGER_ACCOUNTS = {
-    "mgr.primary": "BMR_Primary@2026",
-    "mgr.backup": "BMR_Backup@2026"
+    "manager": "manager123",
+    "backup": "backup123",
 }
+LEGACY_MANAGER_USERNAMES = {"mgr.primary", "mgr.backup"}
+DEMO_STAFF_USERNAME = "staff"
+DEMO_STAFF_PASSWORD = "staff123"
+DEMO_SUPPLIER_USERNAME = "supplier"
+DEMO_SUPPLIER_PASSWORD = "supplier123"
 
 class ManagerCredential(db.Model):
     username = db.Column(db.String(120), primary_key=True)
@@ -851,7 +856,7 @@ def manager():
         return redirect("/change-password?portal=manager")
     mgr = ManagerCredential.query.filter_by(username=ps.get("username")).first()
     days_remaining = manager_password_days_remaining(mgr) if mgr else PASSWORD_EXPIRY_DAYS
-    return render_template("manager.html", is_manager=True, username=ps.get("username", "mgr.primary"), days_remaining=days_remaining)
+    return render_template("manager.html", is_manager=True, username=ps.get("username", "manager"), days_remaining=days_remaining)
 
 @app.route("/profile")
 def profile_page():
@@ -1293,10 +1298,6 @@ def ensure_user_schema():
     db.session.commit()
     for record in PurchaseRequest.query.filter(PurchaseRequest.created_at.is_(None)).all():
         record.created_at = purchase_request_created_at(record)
-    db.session.commit()
-    for username, initial_password in FIXED_MANAGER_ACCOUNTS.items():
-        if not ManagerCredential.query.filter_by(username=username).first():
-            db.session.add(ManagerCredential(username=username, password_hash=generate_password_hash(initial_password), password_changed_at=datetime.now()))
     db.session.commit()
 
 @app.route("/api/users")
@@ -2881,11 +2882,12 @@ def mark_all_notifications_read():
     db.session.commit()
     return jsonify({"status": "success"})
 
-def seed_supplier_account(company_name, supplier_id, contact_person, email, phone, address, password="Supplier@2026"):
-    if User.query.filter_by(username=company_name, role="supplier").first():
+def seed_supplier_account(company_name, supplier_id, contact_person, email, phone, address, password=DEMO_SUPPLIER_PASSWORD, username=None):
+    login_username = username or company_name
+    if User.query.filter_by(username=login_username, role="supplier").first():
         return
     supplier_user = User(
-        username=company_name,
+        username=login_username,
         password_hash=generate_password_hash(password),
         role="supplier",
         password_changed_at=datetime.now(),
@@ -2902,21 +2904,53 @@ def seed_supplier_account(company_name, supplier_id, contact_person, email, phon
         business_address=address,
     ))
 
+def sync_demo_credentials():
+    for legacy_username in LEGACY_MANAGER_USERNAMES:
+        legacy_account = ManagerCredential.query.filter_by(username=legacy_username).first()
+        if legacy_account:
+            db.session.delete(legacy_account)
+    for username, password in FIXED_MANAGER_ACCOUNTS.items():
+        account = ManagerCredential.query.filter_by(username=username).first()
+        if account:
+            account.password_hash = generate_password_hash(password)
+            account.password_changed_at = datetime.now()
+        else:
+            db.session.add(ManagerCredential(
+                username=username,
+                password_hash=generate_password_hash(password),
+                password_changed_at=datetime.now(),
+            ))
+
+    staff = User.query.filter_by(username=DEMO_STAFF_USERNAME, role="staff").first()
+    if staff:
+        staff.password_hash = generate_password_hash(DEMO_STAFF_PASSWORD)
+        staff.password_changed_at = datetime.now()
+
+    demo_supplier = User.query.filter_by(username=DEMO_SUPPLIER_USERNAME, role="supplier").first()
+    metro_supplier = User.query.filter_by(username="Metro Meats Supply", role="supplier").first()
+    if metro_supplier and not demo_supplier:
+        metro_supplier.username = DEMO_SUPPLIER_USERNAME
+
+    for supplier in User.query.filter_by(role="supplier").all():
+        supplier.password_hash = generate_password_hash(DEMO_SUPPLIER_PASSWORD)
+        supplier.password_changed_at = datetime.now()
+
 def initialize_app():
     with app.app_context():
         ensure_user_schema()
         seed_demo_data()
         sync_low_stock_alerts()
-        if not User.query.filter_by(username="staff").first():
+        if not User.query.filter_by(username=DEMO_STAFF_USERNAME).first():
             db.session.add(User(
-                username="staff",
-                password_hash=generate_password_hash("123"),
+                username=DEMO_STAFF_USERNAME,
+                password_hash=generate_password_hash(DEMO_STAFF_PASSWORD),
                 role="staff",
-                password_changed_at=None
+                password_changed_at=datetime.now(),
             ))
         seed_supplier_account(
             "Metro Meats Supply", "SUP-0001", "Juan Dela Cruz",
             "orders@metromeats.ph", "+63 917 555 0101", "123 Industrial Ave, Quezon City",
+            username=DEMO_SUPPLIER_USERNAME,
         )
         seed_supplier_account(
             "Fresh Harvest Trading", "SUP-0002", "Maria Santos",
@@ -2926,12 +2960,7 @@ def initialize_app():
             "Golden Grain Co.", "SUP-0003", "Pedro Reyes",
             "orders@goldengrain.ph", "+63 919 555 0303", "88 Grain Terminal, Pasig",
         )
-        legacy_supplier = User.query.filter_by(username="supplier", role="supplier").first()
-        if legacy_supplier:
-            profile = UserProfile.query.filter_by(user_id=legacy_supplier.id).first()
-            company = profile.company_name if profile and profile.company_name else "Metro Meats Supply"
-            if not User.query.filter_by(username=company).first() or company == "supplier":
-                legacy_supplier.username = company if company != "supplier" else "Metro Meats Supply"
+        sync_demo_credentials()
         db.session.commit()
 
 initialize_app()
