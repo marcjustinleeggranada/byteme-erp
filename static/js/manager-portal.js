@@ -677,6 +677,19 @@
     setText("supplier-user-count", supplierCount);
     setText("disabled-user-count", disabledCount);
 
+    var createStaffBtn = $("btn-create-staff");
+    if (createStaffBtn) {
+      if (staffCount >= 1) {
+        createStaffBtn.disabled = false;
+        createStaffBtn.innerHTML = '<i class="ti ti-edit"></i> Edit Staff';
+        createStaffBtn.title = "Edit the inventory staff account";
+      } else {
+        createStaffBtn.disabled = false;
+        createStaffBtn.innerHTML = '<i class="ti ti-user-plus"></i> Create Staff';
+        createStaffBtn.title = "";
+      }
+    }
+
     if (!users.length) {
       tbody.innerHTML = emptyRow(4, "No managed accounts yet.");
       return;
@@ -702,12 +715,6 @@
         "</tr>"
       );
     }).join("");
-
-    var createStaffBtn = $("btn-create-staff");
-    if (createStaffBtn) {
-      createStaffBtn.disabled = staffCount >= 1;
-      createStaffBtn.title = staffCount >= 1 ? "Only one Inventory Staff account is allowed." : "";
-    }
   }
 
   function renderSupport() {
@@ -1002,6 +1009,8 @@
     $("managed-user-role").value = user.role;
     $("managed-password").value = "";
     $("managed-password-group").style.display = "none";
+    var usernameGroup = $("managed-username") && $("managed-username").closest("label");
+    if (usernameGroup) usernameGroup.style.display = user.role === "supplier" ? "none" : "block";
     if ($("managed-company-group")) {
       $("managed-company-group").style.display = user.role === "supplier" ? "block" : "none";
       if ($("managed-company-name")) $("managed-company-name").value = user.companyName || "";
@@ -1161,7 +1170,13 @@
     var saveBtn = $("user-modal-save");
     var modal = $("user-modal");
 
-    if (createStaff) createStaff.addEventListener("click", function () { openUserModal("staff"); });
+    if (createStaff) {
+      createStaff.addEventListener("click", function () {
+        var activeStaff = users.find(function (u) { return u.role === "staff" && !u.disabled; });
+        if (activeStaff) editUser(activeStaff.id);
+        else openUserModal("staff");
+      });
+    }
     if (createSupplier) createSupplier.addEventListener("click", function () { openUserModal("supplier"); });
     if ($("managed-user-role")) {
       $("managed-user-role").addEventListener("change", function () {
